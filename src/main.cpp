@@ -3121,6 +3121,7 @@ int main(int argc, char** argv) {
                 };
                 auto groups = [&](float x, float tx0, float& yy) {
                     drawPopupSectionTitle(x, yy, "SATELLITE GROUPS");
+                    ui.stepper(tx0, yy, tw, "Constellation", { "All", "Stations", "Starlink", "Navigation", "Weather & EO", "Comms", "Geostationary" }, opts.satCategory); yy += 28;
                     for (int g = 0; g < kSatCategories; ++g) { ui.toggle(tx0, yy, tw, satCategoryName(g), opts.satCat[g]); yy += 24; }
                     yy += 4;
                 };
