@@ -334,6 +334,22 @@ private:
         for (const std::string& w : words) if (!w.empty() && hay.find(w) != std::string::npos) return true;
         return false;
     }
+    // Whole-word match, so "ship" does not match "championship" and "tug" does not match "tugboat names".
+    static bool containsWord(const std::string& hay, const std::vector<std::string>& words) {
+        if (words.empty()) return true;
+        for (const std::string& w : words) {
+            if (w.empty()) continue;
+            for (size_t at = hay.find(w); at != std::string::npos; at = hay.find(w, at + 1)) {
+                const bool before = at == 0 || !std::isalnum((unsigned char)hay[at - 1]);
+                const size_t end = at + w.size();
+                size_t e2 = end;
+                if (e2 < hay.size() && hay[e2] == 's') ++e2;  // plurals: "satellites", "ships"
+                const bool after = end >= hay.size() || !std::isalnum((unsigned char)hay[end]) || e2 >= hay.size() || !std::isalnum((unsigned char)hay[e2]);
+                if (before && after) return true;
+            }
+        }
+        return false;
+    }
 
     void wikipedia(const InfoRequest& r, InfoCard& c) {
         for (const std::string& q : r.queries) {
@@ -351,7 +367,7 @@ private:
                 const webinfo::JV& page = p.second;
                 const std::string title = webinfo::lower(page.str("title")), text = webinfo::lower(page.str("extract"));
                 if (text.empty() || title.find("disambiguation") != std::string::npos || text.find("may refer to") != std::string::npos || text.find("commonly refers to") != std::string::npos) continue;
-                if (!containsAny(title, r.match) || !containsAny(text, r.keywords)) continue;
+                if (!containsAny(title, r.match) || !containsWord(text, r.keywords)) continue;
                 const webinfo::JV* idx = page.get("index");
                 const double i = idx ? idx->d : 99;
                 if (i < bestIndex) { bestIndex = i; best = &page; }

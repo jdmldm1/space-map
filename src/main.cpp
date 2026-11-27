@@ -2393,7 +2393,7 @@ int main(int argc, char** argv) {
                     if (sel || hov || a.mil || ((zoomF > 32.0 || tacVisible < 70) && labelFree(p.x, p.y)))
                         tacticalBlock(p, tr, a.call.empty() ? a.hex : a.call, a.ground ? std::string("GND") : std::string(TextFormat("FL%03.0f  %.0fK  %03.0f", a.altFt / 100.0, a.gs, a.track)), tc, sel || hov);
                 } else {
-                    icons.drawOutlined(aircraftGlyph, p, glyph, (float)a.track, a.ground ? Fade(c, 0.8f) : c);
+                    icons.drawAircraft(aircraftGlyph, p, glyph, (float)a.track, a.ground ? Fade(c, 0.8f) : c, a.ground ? 0.0f : (float)Clamp(a.altFt / 40000.0, 0.0, 1.0));
                     if (a.mil) DrawCircleLines((int)p.x, (int)p.y, glyph * 0.62f + 2.0f, Fade(Color{ 255, 120, 50, 255 }, 0.9f));
                 }
                 if (sel) DrawCircleLines((int)p.x, (int)p.y, s + 6, WHITE);
@@ -2465,7 +2465,7 @@ int main(int argc, char** argv) {
                     if (sel || hov || shipMil || (zoomF > 30.0 && labelFree(p.x, p.y)))
                         tacticalBlock(p, tr, v.name.empty() ? std::string(TextFormat("MMSI %d", v.mmsi)) : v.name, std::string(TextFormat("%.1fK  %03.0f", v.sog, hd)), tc, sel || hov);
                 } else {
-                    icons.drawOutlined(shipIcon(cat, v.shipType), p, s * 2.7f, hd, moving ? c : Fade(c, 0.7f));
+                    icons.drawShip(shipIcon(cat, v.shipType), p, s * 2.7f, hd, moving ? c : Fade(c, 0.7f), (float)v.sog);
                     if (ais::isMilitaryVessel(v)) DrawCircleLines((int)p.x, (int)p.y, s * 1.5f + 2.0f, Fade(Color{ 255, 120, 50, 255 }, 0.9f));
                 }
                 if (sel) DrawCircleLines((int)p.x, (int)p.y, s + 7, WHITE);
@@ -4027,6 +4027,7 @@ int main(int argc, char** argv) {
                     if (e.norad) cardReq.norad = std::to_string(e.norad);
                     if (!junk) {
                         if (!e.group.empty()) { cardReq.queries.push_back(e.group); cardReq.match.push_back(firstWord(e.group)); }
+                        if (e.name == "HST") { cardReq.queries.push_back("Hubble Space Telescope"); cardReq.match.push_back("hubble"); }  // the catalogue name is just the abbreviation
                         cardReq.queries.push_back(clean); cardReq.match.push_back(firstWord(clean));
                         if (e.name != clean) cardReq.queries.push_back(e.name);
                         cardReq.keywords = spaceWords;
@@ -4423,10 +4424,10 @@ int main(int argc, char** argv) {
         if (!iconSheet) return;
         DrawRectangle(0, 0, (int)screenWidth, (int)screenHeight, { 20, 26, 40, 255 });
         for (int i = 0; i < (int)Icon::Count; ++i) {
-            const Vector2 c{ 90.0f + (i % 7) * 170.0f, 90.0f + (i / 7) * 190.0f };
-            icons.drawOutlined((Icon)i, c, 120.0f, 0.0f, { 120, 200, 255, 255 });
-            icons.draw((Icon)i, { c.x, c.y + 80.0f }, 22.0f, 0.0f, WHITE);
-            icons.draw((Icon)i, { c.x + 40.0f, c.y + 80.0f }, 14.0f, 0.0f, WHITE);
+            const Vector2 c{ 75.0f + (i % 9) * 135.0f, 75.0f + (i / 9) * 160.0f };
+            icons.drawOutlined((Icon)i, c, 100.0f, 0.0f, { 120, 200, 255, 255 });
+            icons.draw((Icon)i, { c.x - 12.0f, c.y + 62.0f }, 22.0f, 0.0f, WHITE);
+            icons.draw((Icon)i, { c.x + 18.0f, c.y + 62.0f }, 14.0f, 0.0f, WHITE);
         }
     };
 
