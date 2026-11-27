@@ -4069,6 +4069,7 @@ int main(int argc, char** argv) {
     };
 
     auto drawSkyPassPlanner = [&]() {
+        if (layersOpen || presetsOpen || missionsOpen || eclipsesOpen) return;  // the planner sits on the left, where these popups open, so it steps aside
         if (mode == Mode::Sky && station.set) {
             const int cfg = opts.passHours * 10 + opts.passMinEl;
             if (skyPassVer != stationVer || skyPassCfg != cfg || std::fabs(simTime - skyPassT) > 1800.0) {
