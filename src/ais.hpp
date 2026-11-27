@@ -8,10 +8,13 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <memory>
 #include <unordered_map>
 #include <vector>
 
+#include "lookup.hpp"
 #include "net.hpp"
+#include "websocket.hpp"
 
 struct Vessel {
     int mmsi = 0, imo = 0, shipType = 0, navStat = 15, heading = 511, len = 0, beam = 0;
@@ -321,6 +324,9 @@ inline std::vector<Vessel> parseDigitrafficVessels(const std::string& s) {
 
 }
 
+// The map area the stream follows (degrees).
+struct AisRegion { bool valid = false; double minLat = 0, maxLat = 0, minLon = 0, maxLon = 0; };
+
 class AisFeed {
 public:
     explicit AisFeed(std::string tmpDir, std::string nmeaHostPort) : tmp_(std::move(tmpDir)), nmea_(std::move(nmeaHostPort)) {}
@@ -332,6 +338,21 @@ public:
     unsigned version() const { return version_; }
     std::string status() { std::lock_guard<std::mutex> lk(m_); return status_; }
     bool hasNmea() const { return !nmea_.empty(); }
+
+    // ---- aisstream.io: a live worldwide AIS stream over a WebSocket (needs a free API key from aisstream.io) ----
+    void setStreamKey(const std::string& key) {
+        std::lock_guard<std::mutex> lk(m_);
+        if (key != streamKey_) { streamKey_ = key; streamKeyChanged_ = true; }
+    }
+    // The map area being looked at; the stream is subscribed to this (padded) box and follows it as the map moves.
+    void setRegion(const AisRegion& r) { std::lock_guard<std::mutex> lk(m_); region_ = r; }
+    std::string streamStatus() { std::lock_guard<std::mutex> lk(m_); return streamStatus_; }
+    bool streamLive() const { return streamLive_; }
+    // Closes the aisstream.io connection politely (waits a moment for it); call before the program exits.
+    void shutdown() {
+        shutdown_ = true;
+        for (int i = 0; i < 40 && !streamClosed_; ++i) std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
     std::vector<Vessel> snapshot() {
         std::lock_guard<std::mutex> lk(m_);
         std::vector<Vessel> v;
@@ -363,6 +384,147 @@ public:
     }
 
 private:
+
+    void setStreamStatus(const std::string& s) { std::lock_guard<std::mutex> lk(m_); streamStatus_ = s; }
+
+    static std::string trimName(std::string s) {
+        while (!s.empty() && (s.back() == ' ' || s.back() == '@' || s.back() == '\0')) s.pop_back();
+        size_t b = 0;
+        while (b < s.size() && s[b] == ' ') ++b;
+        return s.substr(b);
+    }
+
+    // One aisstream.io message -> the same decoded record the NMEA path produces. Returns false when it carries nothing we use.
+    static bool decodeStreamMessage(const webinfo::JV& root, ais::Msg& m) {
+        const std::string type = root.str("MessageType");
+        const webinfo::JV* message = root.get("Message");
+        const webinfo::JV* meta = root.get("MetaData");
+        if (type.empty() || !message) return false;
+        const webinfo::JV* body = message->get(type.c_str());
+        if (!body) return false;
+        m.mmsi = (int)body->num("UserID", meta ? meta->num("MMSI") : 0);
+        if (m.mmsi <= 0) return false;
+        const std::string metaName = meta ? trimName(meta->str("ShipName")) : std::string();
+        auto position = [&](int msgType) {
+            const double lat = body->num("Latitude", 91.0), lon = body->num("Longitude", 181.0);
+            if (lat > 90.0 || lat < -90.0 || lon > 180.0 || lon < -180.0) return false;
+            m.type = msgType; m.hasPos = true; m.lat = lat; m.lon = lon;
+            const double sog = body->num("Sog", 0.0), cog = body->num("Cog", 0.0);
+            m.sog = sog >= 102.3 ? 0.0 : sog; m.cog = cog >= 360.0 ? 0.0 : cog;
+            m.heading = (int)body->num("TrueHeading", 511.0);
+            m.navStat = (int)body->num("NavigationalStatus", 15.0);
+            if (!metaName.empty()) { m.name = metaName; m.hasStatic = true; }
+            return true;
+        };
+        auto dimensions = [&](const webinfo::JV* d) { if (d) { m.len = (int)(d->num("A") + d->num("B")); m.beam = (int)(d->num("C") + d->num("D")); } };
+        if (type == "PositionReport") return position(1);
+        if (type == "StandardClassBPositionReport") return position(18);
+        if (type == "ExtendedClassBPositionReport") {
+            if (!position(19)) return false;
+            m.shipType = (int)body->num("Type"); dimensions(body->get("Dimension"));
+            return true;
+        }
+        if (type == "ShipStaticData") {
+            m.type = 5; m.hasStatic = true;
+            m.name = trimName(body->str("Name")); m.callsign = trimName(body->str("CallSign")); m.dest = trimName(body->str("Destination"));
+            m.imo = (int)body->num("ImoNumber"); m.shipType = (int)body->num("Type"); m.draught = body->num("MaximumStaticDraught");
+            dimensions(body->get("Dimension"));
+            if (const webinfo::JV* eta = body->get("Eta")) {
+                const int mo = (int)eta->num("Month"), d = (int)eta->num("Day"), h = (int)eta->num("Hour"), mi = (int)eta->num("Minute");
+                if (mo > 0 && mo <= 12 && d > 0 && h < 24 && mi < 60) { char b[24]; std::snprintf(b, sizeof b, "%02d-%02d %02d:%02d", mo, d, h, mi); m.eta = b; }
+            }
+            return true;
+        }
+        if (type == "StaticDataReport") {
+            m.type = 24; m.hasStatic = true;
+            if (const webinfo::JV* a = body->get("ReportA")) m.name = trimName(a->str("Name"));
+            if (const webinfo::JV* b = body->get("ReportB")) { m.shipType = (int)b->num("ShipType"); m.callsign = trimName(b->str("CallSign")); dimensions(b->get("Dimension")); }
+            return true;
+        }
+        return false;
+    }
+
+    static AisRegion paddedBox(const AisRegion& r) {
+        AisRegion b = r;
+        const double padLat = (r.maxLat - r.minLat) * 0.3, padLon = (r.maxLon - r.minLon) * 0.3;
+        b.minLat -= padLat; b.maxLat += padLat; b.minLon -= padLon; b.maxLon += padLon;
+        const double cLat = (r.minLat + r.maxLat) * 0.5, cLon = (r.minLon + r.maxLon) * 0.5;
+        if (b.maxLon - b.minLon > 50.0) { b.minLon = cLon - 25.0; b.maxLon = cLon + 25.0; }  // zoomed far out: a worldwide stream would bury the map
+        if (b.maxLat - b.minLat > 35.0) { b.minLat = cLat - 17.5; b.maxLat = cLat + 17.5; }
+        b.minLat = std::max(b.minLat, -85.0); b.maxLat = std::min(b.maxLat, 85.0); b.minLon = std::max(b.minLon, -180.0); b.maxLon = std::min(b.maxLon, 180.0);
+        return b;
+    }
+
+    // Called every loop tick: keeps the connection and subscription alive and applies whatever has arrived.
+    void streamTick(double now, bool& changed) {
+        std::string key;
+        AisRegion r;
+        bool keyChanged;
+        { std::lock_guard<std::mutex> lk(m_); key = streamKey_; r = region_; keyChanged = streamKeyChanged_; streamKeyChanged_ = false; }
+        if (shutdown_) { ws_.reset(); streamClosed_ = true; return; }
+        if (keyChanged) { ws_.reset(); subValid_ = false; streamRetry_ = 0; streamFails_ = 0; }
+        streamLive_ = ws_ && ws_->open() && streamMsgs_ > 0;
+        if (key.empty()) { ws_.reset(); setStreamStatus(WebSocketClient::available() ? "no key set" : "not available in this build"); return; }
+        if (!WebSocketClient::available()) { setStreamStatus("not available in this build"); return; }
+        if (!r.valid) { if (ws_) { ws_.reset(); subValid_ = false; } setStreamStatus("idle - open the Map to stream"); return; }
+        if (ws_ && !ws_->open()) {
+            const unsigned long why = ws_->exitCode();
+            ws_.reset(); subValid_ = false; streamRetry_ = now + 3.0;
+            setStreamStatus(why == 1000 ? "closed by the server, reconnecting" : "connection dropped (" + std::to_string(why) + "), reconnecting");
+        }
+        if (!ws_) {
+            if (now < streamRetry_) return;
+            std::unique_ptr<WebSocketClient> fresh(new WebSocketClient);
+            std::string err;
+            setStreamStatus("connecting...");
+            if (!fresh->connect("stream.aisstream.io", "/v0/stream", err)) {
+                streamRetry_ = now + std::min(120.0, 5.0 * (1 << std::min(streamFails_++, 4)));
+                setStreamStatus("connection failed: " + err);
+                return;
+            }
+            ws_ = std::move(fresh);
+            streamMsgs_ = 0; subValid_ = false;
+        }
+        const bool outside = subValid_ && (r.minLat < sub_.minLat || r.maxLat > sub_.maxLat || r.minLon < sub_.minLon || r.maxLon > sub_.maxLon);
+        const bool tooBig = subValid_ && ((sub_.maxLat - sub_.minLat) > 4.0 * std::max(0.5, r.maxLat - r.minLat) || (sub_.maxLon - sub_.minLon) > 4.0 * std::max(0.5, r.maxLon - r.minLon));
+        if (!subValid_ || ((outside || tooBig) && now - subAt_ > 6.0)) {
+            const AisRegion box = paddedBox(r);
+            char b[640];
+            std::snprintf(b, sizeof b,
+                          "{\"APIKey\":\"%s\",\"BoundingBoxes\":[[[%.4f,%.4f],[%.4f,%.4f]]],\"FilterMessageTypes\":[\"PositionReport\",\"StandardClassBPositionReport\",\"ExtendedClassBPositionReport\",\"ShipStaticData\",\"StaticDataReport\"]}",
+                          key.c_str(), box.minLat, box.minLon, box.maxLat, box.maxLon);
+            if (ws_->send(b)) { sub_ = box; subValid_ = true; subAt_ = now; }
+        }
+        std::vector<ais::Msg> batch;
+        std::string text;
+        std::string error;
+        for (int n = 0; n < 4000 && ws_->poll(text); ++n) {
+            webinfo::JV root;
+            if (!webinfo::parseJson(text, root)) continue;
+            const std::string e = root.str("error");
+            if (!e.empty()) { error = e; continue; }
+            ais::Msg m;
+            if (decodeStreamMessage(root, m)) batch.push_back(std::move(m));
+        }
+        if (!error.empty()) {  // a refused key is not worth retrying until it is changed
+            ws_.reset(); subValid_ = false; streamRetry_ = now + 600.0;
+            setStreamStatus("refused: " + error);
+            return;
+        }
+        if (!batch.empty()) {
+            const double t = steadySeconds();
+            std::lock_guard<std::mutex> lk(m_);
+            for (const ais::Msg& m : batch) apply(m, t, "aisstream.io");
+            streamMsgs_ += batch.size();
+            streamStatus_ = "streaming (" + std::to_string(streamMsgs_) + " messages)";
+            changed = true;
+        } else if (ws_ && subValid_ && streamMsgs_ == 0) {
+            std::lock_guard<std::mutex> lk(m_);
+            streamStatus_ = "connected, waiting for ships in view";
+        }
+        streamLive_ = ws_ && ws_->open() && streamMsgs_ > 0;
+    }
+
     static void pushTrail(Vessel& v) {
         v.trail.push_back({ (float)v.lat, (float)v.lon });
         if (v.trail.size() > 30) v.trail.erase(v.trail.begin());
@@ -374,7 +536,11 @@ private:
         std::string srcNote;
         while (!quit_) {
             std::this_thread::sleep_for(std::chrono::milliseconds(250));
-            if (!on_) continue;
+            if (!on_ || shutdown_) {  // ships switched off (or the app is closing): drop the stream rather than keep it running unseen
+                if (ws_) { ws_.reset(); subValid_ = false; }
+                if (shutdown_) streamClosed_ = true;
+                if (!on_) continue;
+            }
             const double now = steadySeconds();
             bool changed = false;
 
@@ -428,13 +594,14 @@ private:
                 nextNmea_ = steadySeconds() + 12.0;
                 changed = changed || n > 0;
             }
+            streamTick(now, changed);
             if (changed) {
                 std::lock_guard<std::mutex> lk(m_);
                 const double t = steadySeconds();
                 for (auto it = db_.begin(); it != db_.end();) it = (it->second.hasPos && t - it->second.stamp > 5400.0) ? db_.erase(it) : std::next(it);
                 size_t withPos = 0;
                 for (auto& kv : db_) withPos += kv.second.hasPos;
-                status_ = "AIS: " + std::to_string(withPos) + " vessels  (Digitraffic" + (nmea_.empty() ? ", Baltic / Finnish waters)" : " + NMEA " + nmea_ + ")");
+                status_ = "AIS: " + std::to_string(withPos) + " vessels  (Digitraffic" + (streamLive_ ? " + aisstream.io" : "") + (nmea_.empty() ? (streamLive_ ? ")" : ", Baltic / Finnish waters)") : " + NMEA " + nmea_ + ")");
                 ++version_;
             }
         }
@@ -448,4 +615,13 @@ private:
     std::atomic<double> nextPos_{ 0 }, nextNmea_{ 0 }, nextMeta_{ 0 };
     std::unordered_map<int, Vessel> db_;
     std::string status_ = "AIS: waiting for data...";
+    // aisstream.io state (the loop thread owns the connection; the strings and region are guarded by m_)
+    std::string streamKey_, streamStatus_ = "no key set";
+    bool streamKeyChanged_ = false, subValid_ = false;
+    AisRegion region_, sub_;
+    std::unique_ptr<WebSocketClient> ws_;
+    double streamRetry_ = 0, subAt_ = 0;
+    int streamFails_ = 0;
+    size_t streamMsgs_ = 0;
+    std::atomic<bool> streamLive_{ false }, shutdown_{ false }, streamClosed_{ false };
 };

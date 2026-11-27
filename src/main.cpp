@@ -961,6 +961,16 @@ int main(int argc, char** argv) {
                 shotT(14.0, "defaults");
                 atT(15.0, [&]() {});
             }
+            if (scenario == "galveston") {  // live aisstream.io check: a long look at one area
+                atT(1.0, [&]() { opts.showHints = false; setMode(Mode::Map); adsb.setEnabled(false); if (!shipsOn) toggleShips(); mapWidthPx = screenWidth * 70.0; mapCentreU = (-94.8 + 180.0) / 360.0; const double sn = std::sin(29.3 * DEG); mapCentreV = 0.5 - std::log((1 + sn) / (1 - sn)) / (4 * PI_D); });
+                for (int t : { 20, 45, 70, 95 }) atT((double)t, [&]() {
+                    int inView = 0;
+                    for (const Vessel& v : ships) if (v.src == "aisstream.io" && v.lat > 27.5 && v.lat < 31 && v.lon > -97.5 && v.lon < -92) ++inView;
+                    std::puts((std::string("AISSTREAM STATUS: ") + ais.streamStatus() + " | vessels from the stream in the Gulf coast box: " + std::to_string(inView)).c_str());
+                });
+                shotT(96.0, "galveston");
+                atT(97.0, [&]() {});
+            }
             if (scenario == "tactical") {
                 atT(1.0, [&]() { opts.showHints = false; station = { true, 38.9, -77.04 }; ++stationVer; setTactical(true); mapWidthPx = screenWidth * 16.0; mapCentreU = (-77.04 + 180.0) / 360.0; const double sn = std::sin(38.9 * DEG); mapCentreV = 0.5 - std::log((1 + sn) / (1 - sn)) / (4 * PI_D); });
                 shotT(25.0, "tac-1");
@@ -1654,6 +1664,7 @@ int main(int argc, char** argv) {
 
     auto refreshMapDataLayers = [&]() {
         steadyNow = steadySeconds();
+        ais.setStreamKey(opts.aisKey);
         if (mode == Mode::Map) {
             double lat0, lon0, lat1, lon1, latC, lonC;
             screenToLatLon(0, 0, lat0, lon0); screenToLatLon(screenWidth, screenHeight, lat1, lon1); screenToLatLon(screenWidth * 0.5, screenHeight * 0.5, latC, lonC);
@@ -1666,6 +1677,18 @@ int main(int argc, char** argv) {
                 reg.halfDiagNm = std::acos(Clamp((float)(std::sin(a1) * std::sin(a2) + std::cos(a1) * std::cos(a2) * std::cos(dl)), -1.0f, 1.0f)) * 3440.065;
                 adsb.setRegion(reg);
             } else adsb.setRegion(AdsbRegion{});
+            if (shipsOn) {  // the aisstream.io subscription follows what is on screen
+                AisRegion ar;
+                ar.valid = true;
+                ar.minLat = std::min(lat0, lat1); ar.maxLat = std::max(lat0, lat1);
+                ar.minLon = lon0 <= lon1 ? lon0 : lonC - 30.0; ar.maxLon = lon0 <= lon1 ? lon1 : lonC + 30.0;
+                ais.setRegion(ar);
+                static bool hinted = false;  // once per run: explain why ships are missing outside the Baltic
+                if (!hinted && opts.aisKey.empty() && WebSocketClient::available() && !(latC > 53.0 && latC < 67.0 && lonC > 8.0 && lonC < 32.0)) {
+                    hinted = true;
+                    pushBanner("Ships outside the Baltic need a free aisstream.io key: Settings > Ships", Color{ 255, 128, 60, 255 });
+                }
+            } else ais.setRegion(AisRegion{});
             WeatherRequest wr;
             wr.valid = wxProbe || opts.windOn;
             wr.cLat = latC; wr.cLon = lonC; wr.minLat = std::min(lat0, lat1); wr.maxLat = std::max(lat0, lat1);
@@ -1726,7 +1749,7 @@ int main(int argc, char** argv) {
                 if (dAc != m) hoveredAc = -1;
                 if (dSh != m) hoveredShip = -1;
             }
-        } else { adsb.setRegion(AdsbRegion{}); wx.setEnabled(false); wx.setRequest(WeatherRequest{}); }
+        } else { adsb.setRegion(AdsbRegion{}); ais.setRegion(AisRegion{}); wx.setEnabled(false); wx.setRequest(WeatherRequest{}); }
 
     };
 
@@ -3408,7 +3431,7 @@ int main(int argc, char** argv) {
                 ui.stepper(tx, y, tw, "Style", { "Blue Marble", "OSM Dark", "OSM Standard", "NASA MODIS (daily)" }, opts.baseMap); y += 30;
                 drawPopupSectionTitle(lx, y, "LIVE DATA OVERLAYS");
                 { bool v = adsb.enabled(); if (ui.toggle(tx, y, tw, "Aircraft  (ADS-B)   [A]", v)) adsb.setEnabled(v); y += 24; }
-                { bool v = shipsOn; if (ui.toggle(tx, y, tw, "Ships  (AIS: Baltic / Finland)   [B]", v, "Digitraffic open data; add your own NMEA feed in spacemap.cfg")) toggleShips(); y += 24; }
+                { bool v = shipsOn; if (ui.toggle(tx, y, tw, opts.aisKey.empty() ? "Ships  (AIS: Baltic / Finland)   [B]" : "Ships  (AIS: live, worldwide)   [B]", v, "Digitraffic open data; add your own NMEA feed in spacemap.cfg")) toggleShips(); y += 24; }
                 { bool v = opts.radarOn; if (ui.toggle(tx, y, tw, "Rain radar  (RainViewer)   [D]", v)) toggleRadar(); y += 24; }
                 ui.toggle(tx, y, tw, "Cloud imagery  (GOES / Himawari IR)   [K]", opts.cloudsOn, "NASA GIBS; covers the Americas and Asia-Pacific"); y += 24;
                 ui.toggle(tx, y, tw, "Wind vectors  (Open-Meteo)   [Z]", opts.windOn); y += 24;
@@ -3618,7 +3641,7 @@ int main(int argc, char** argv) {
     auto drawSettingsPopup = [&]() {
         static bool settingsWas = false;
         if (settingsOpen) {
-            const float pw = 340.0f, lx = 8.0f, py = toolbarHeight + 6.0f, ph = 528.0f;
+            const float pw = 340.0f, lx = 8.0f, py = toolbarHeight + 6.0f, ph = 668.0f;
             uiShadowBox({ lx, py, pw, ph }, 0.94f);
             ui.region({ lx, py, pw, ph });
             float y = py + 10.0f;
@@ -3641,6 +3664,20 @@ int main(int argc, char** argv) {
             ui.toggle(tx, y, tw, "Fishing", opts.shipFish); y += 24;
             ui.toggle(tx, y, tw, "Tugs, pilots, sailing, other", opts.shipOther); y += 24;
             ui.toggle(tx, y, tw, "Hide stationary vessels", opts.shipMoving); y += 30;
+            drawPopupSectionTitle(lx, y, "LIVE SHIPS WORLDWIDE  (aisstream.io)");
+            UiText(opts.aisKey.empty() ? "Free key: sign up at aisstream.io, copy it, then paste." : TextFormat("Key ...%s   %s", opts.aisKey.substr(opts.aisKey.size() > 4 ? opts.aisKey.size() - 4 : 0).c_str(), ais.streamStatus().c_str()), (int)tx + 2, (int)y, 12, mutedColor);
+            y += 20;
+            if (!WebSocketClient::available()) UiText("This build has no WebSocket support (needs libcurl 7.86+).", (int)tx + 2, (int)y, 11, Color{ 255, 150, 90, 255 }), y += 18;
+            if (ui.button({ tx + 2, y, 200, 26 }, "Paste key from clipboard", false, "Copy your API key from aisstream.io first, then click here")) {
+                const char* clip = GetClipboardText();
+                std::string k = clip ? clip : "";
+                k.erase(std::remove_if(k.begin(), k.end(), [](unsigned char c) { return std::isspace(c) || c == '"' || c == '\''; }), k.end());
+                const bool plausible = k.size() >= 20 && k.size() <= 80 && std::all_of(k.begin(), k.end(), [](unsigned char c) { return std::isalnum(c) || c == '-' || c == '_'; });
+                if (plausible) { opts.aisKey = k; opts.save(); pushBanner("aisstream.io key saved. Live ships will appear shortly.", Color{ 120, 220, 160, 255 }); }
+                else pushBanner("The clipboard doesn't look like an aisstream.io key", Color{ 255, 128, 60, 255 });
+            }
+            if (!opts.aisKey.empty() && ui.button({ tx + 208, y, 110, 26 }, "Remove key", false, "Go back to the Baltic-only feed")) { opts.aisKey.clear(); opts.save(); }
+            y += 36;
             if (ui.button({ tx + 2, y, 150, 26 }, "Reset to defaults", false, "Restore all options")) { const std::string nm = opts.aisNmea; opts.reset(); opts.aisNmea = nm; }
             y += 34;
             UiText("Options are saved to spacemap.cfg when this panel closes.", (int)tx + 2, (int)y, 11, mutedColor);
@@ -4572,6 +4609,7 @@ int main(int argc, char** argv) {
     }
 
     acHist.save(acHistFile); shipHist.save(shipHistFile);
+    ais.shutdown();  // close the aisstream.io WebSocket politely
     CloseWindow();
     std::fflush(stdout);
     std::_Exit(0);

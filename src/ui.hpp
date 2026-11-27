@@ -55,7 +55,7 @@ struct Options {
     int passHours = 0, passMinEl = 0, alertLead = 1;       // planner horizon (24h/3d/7d), min elevation (0/10/20/30), alert lead (5/10/30 min)
     bool passAlerts = false, osNotify = true;
     int missionTrails = 0;  // 0 = short tails around each spacecraft, 1 = full paths, 2 = selected only
-    std::string aisNmea;
+    std::string aisNmea, aisKey;  // aisKey: the aisstream.io API key
     std::string radarNote;
 
     void reset() { *this = Options(); }
@@ -80,6 +80,7 @@ struct Options {
         I("baseMap", baseMap); F("radarOpacity", radarOpacity); B("showHints", showHints); B("vsync", vsync); B("showStatus", showStatus); B("showMissions", showMissions); B("tactical", tactical); B("showDeepSky", showDeepSky); I("missionTrails", missionTrails); I("passHours", passHours); I("passMinEl", passMinEl); I("alertLead", alertLead); B("passAlerts", passAlerts); B("osNotify", osNotify);
         if (kv.count("satCats")) { const std::string& sc = kv["satCats"]; for (int i = 0; i < 6 && i < (int)sc.size(); ++i) satCat[i] = sc[i] != '0'; }
         if (kv.count("ais_nmea")) aisNmea = kv["ais_nmea"];
+        if (kv.count("aisstream_key")) aisKey = kv["aisstream_key"];
         missionTrails = std::clamp(missionTrails, 0, 2); passHours = std::clamp(passHours, 0, 2); passMinEl = std::clamp(passMinEl, 0, 3); alertLead = std::clamp(alertLead, 0, 2); units = std::clamp(units, 0, 2); baseMap = std::clamp(baseMap, 0, 3); acMinAlt = std::clamp(acMinAlt, 0, 3); milFilter = std::clamp(milFilter, 0, 2); satCategory = std::clamp(satCategory, 0, 6);
         markerScale = std::clamp(markerScale, 0.5f, 2.5f); starBright = std::clamp(starBright, 0.4f, 2.0f); radarOpacity = std::clamp(radarOpacity, 0.2f, 1.0f);
     }
@@ -90,7 +91,7 @@ struct Options {
           << "\nshowSpecular=" << showSpecular << "\nsatLEO=" << satLEO << "\nsatMEO=" << satMEO << "\nsatGEO=" << satGEO << "\nsatHEO=" << satHEO << "\nsatCategory=" << satCategory
           << "\nacGround=" << acGround << "\nacTrails=" << acTrails << "\nacMinAlt=" << acMinAlt << "\nmilFilter=" << milFilter << "\nshipCargo=" << shipCargo << "\nshipTanker=" << shipTanker
           << "\nshipPass=" << shipPass << "\nshipFish=" << shipFish << "\nshipOther=" << shipOther << "\nshipMoving=" << shipMoving << "\nbaseMap=" << baseMap
-          << "\nradarOpacity=" << radarOpacity << "\nshowHints=" << showHints << "\nvsync=" << vsync << "\nshowStatus=" << showStatus << "\nshowMissions=" << showMissions << "\ntactical=" << tactical << "\nshowDeepSky=" << showDeepSky << "\nmissionTrails=" << missionTrails << "\npassHours=" << passHours << "\npassMinEl=" << passMinEl << "\nalertLead=" << alertLead << "\npassAlerts=" << passAlerts << "\nosNotify=" << osNotify << "\nsatCats=" << (satCat[0] ? 1 : 0) << (satCat[1] ? 1 : 0) << (satCat[2] ? 1 : 0) << (satCat[3] ? 1 : 0) << (satCat[4] ? 1 : 0) << (satCat[5] ? 1 : 0) << "\nais_nmea=" << aisNmea << "\n";
+          << "\nradarOpacity=" << radarOpacity << "\nshowHints=" << showHints << "\nvsync=" << vsync << "\nshowStatus=" << showStatus << "\nshowMissions=" << showMissions << "\ntactical=" << tactical << "\nshowDeepSky=" << showDeepSky << "\nmissionTrails=" << missionTrails << "\npassHours=" << passHours << "\npassMinEl=" << passMinEl << "\nalertLead=" << alertLead << "\npassAlerts=" << passAlerts << "\nosNotify=" << osNotify << "\nsatCats=" << (satCat[0] ? 1 : 0) << (satCat[1] ? 1 : 0) << (satCat[2] ? 1 : 0) << (satCat[3] ? 1 : 0) << (satCat[4] ? 1 : 0) << (satCat[5] ? 1 : 0) << "\nais_nmea=" << aisNmea << "\naisstream_key=" << aisKey << "\n";
     }
 };
 
