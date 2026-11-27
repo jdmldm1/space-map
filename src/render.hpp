@@ -149,20 +149,20 @@ struct PointCanvas {
     }
 };
 
-// Tactical palette. Aircraft altitude runs from amber near the ground through mint and cyan to ice-white at cruising
-// height, so busy skies stay legible and the high traffic glows against a dark map.
+// Tactical palette: steel greys on a dark map. Altitude is brightness (cruising traffic is the brightest), vessels are told
+// apart by shade as well as by silhouette, and the only colour left is orange for military and red for emergencies.
 inline Color altColor(double ft) {
-    static const double s[][4] = { { 0, 255, 176, 64 }, { 6000, 240, 214, 96 }, { 14000, 120, 224, 168 }, { 24000, 70, 208, 236 },
-                                   { 34000, 120, 176, 255 }, { 44000, 215, 228, 255 } };
+    static const double s[][4] = { { 0, 128, 138, 152 }, { 6000, 150, 160, 173 }, { 14000, 178, 187, 199 }, { 24000, 206, 213, 222 },
+                                   { 34000, 232, 237, 243 }, { 44000, 252, 254, 255 } };
     const int n = 6;
-    if (ft <= s[0][0]) return { 255, 176, 64, 255 };
+    if (ft <= s[0][0]) return { 128, 138, 152, 255 };
     for (int i = 1; i < n; ++i)
         if (ft <= s[i][0]) {
             const double t = (ft - s[i - 1][0]) / (s[i][0] - s[i - 1][0]);
             return { (unsigned char)(s[i - 1][1] + t * (s[i][1] - s[i - 1][1])), (unsigned char)(s[i - 1][2] + t * (s[i][2] - s[i - 1][2])),
                      (unsigned char)(s[i - 1][3] + t * (s[i][3] - s[i - 1][3])), 255 };
         }
-    return { 215, 228, 255, 255 };
+    return { 252, 254, 255, 255 };
 }
 
 inline constexpr Color kMilitaryColor{ 255, 128, 60, 255 };
@@ -170,12 +170,12 @@ inline constexpr Color kMilitaryColor{ 255, 128, 60, 255 };
 // Vessel colour by AIS category (0 cargo, 1 tanker, 2 passenger, 3 fishing, 4 other) and raw AIS ship type.
 inline Color shipColor(int category, int shipType) {
     if (shipType == 35 || shipType == 55) return kMilitaryColor;
-    if (shipType == 0) return { 160, 172, 188, 255 };
+    if (shipType == 0) return { 100, 108, 120, 255 };
     switch (category) {
-        case 0: return { 104, 214, 168, 255 };
-        case 1: return { 255, 118, 96, 255 };
-        case 2: return { 120, 190, 255, 255 };
-        case 3: return { 255, 206, 100, 255 };
-        default: return { 184, 160, 255, 255 };
+        case 0: return { 176, 186, 198, 255 };  // cargo
+        case 1: return { 138, 148, 162, 255 };  // tanker
+        case 2: return { 236, 240, 246, 255 };  // passenger
+        case 3: return { 160, 168, 178, 255 };  // fishing
+        default: return { 120, 130, 144, 255 };  // tugs, pilots, sailing, other
     }
 }

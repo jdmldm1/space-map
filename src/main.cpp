@@ -1899,7 +1899,7 @@ int main(int argc, char** argv) {
     };
 
     // ---- Tactical view (Map): dimmed map, geodesic range rings and bearing lines, NATO-style track symbols, velocity leaders ----
-    const Color tacCiv{ 80, 220, 255, 255 }, tacMil = kMilitaryColor, tacGreen{ 90, 255, 140, 255 };
+    const Color tacCiv{ 205, 214, 226, 255 }, tacMil = kMilitaryColor, tacGreen{ 176, 192, 208, 255 };
     static const double kUnitKm[3] = { 1.0, 1.609344, 1.852 };
     static const char* kUnitName[3] = { "km", "mi", "nm" };
     setTactical = [&](bool on) {
@@ -2343,13 +2343,13 @@ int main(int argc, char** argv) {
                 const Vector2 p = latLonToScreen(city.latitude, city.longitude);
                 if (p.x < -40 || p.x > screenWidth + 40 || p.y < -20 || p.y > screenHeight + 20) continue;
                 const float radius = (float)Clamp(2.2 + std::log10(std::max(1.0, city.population / 1.0e5)) * 1.6, 2.2, 5.5) * opts.markerScale;
-                const Color fill = city.capital ? Color{ 255, 214, 110, 255 } : Color{ 236, 241, 250, 255 };
+                const Color fill = city.capital ? Color{ 226, 232, 242, 255 } : Color{ 150, 162, 178, 255 };  // steel tones: cities stay quiet so the traffic stands out
                 DrawCircleV(p, radius + 1.6f, Fade(BLACK, 0.6f * cityFade));
                 DrawCircleV(p, radius, Fade(fill, cityFade));
                 if (city.capital) DrawCircleLines((int)p.x, (int)p.y, radius + 3.0f, Fade(fill, 0.7f * cityFade));
                 if (showLabels && labelFree(p.x + 9, p.y)) {
                     UiText(city.name.c_str(), (int)p.x + 10, (int)p.y - 6, 13, Fade(BLACK, 0.8f * cityFade));
-                    UiText(city.name.c_str(), (int)p.x + 9, (int)p.y - 7, 13, Fade(city.capital ? Color{ 255, 232, 170, 255 } : WHITE, 0.95f * cityFade));
+                    UiText(city.name.c_str(), (int)p.x + 9, (int)p.y - 7, 13, Fade(city.capital ? Color{ 226, 232, 242, 255 } : Color{ 176, 188, 204, 255 }, 0.95f * cityFade));
                 }
             }
         }
@@ -2367,7 +2367,7 @@ int main(int argc, char** argv) {
                 const Vector2 p = aircraftScreen[i];
                 if (p.x < -30 || p.x > screenWidth + 30 || p.y < -30 || p.y > screenHeight + 30) continue;
                 const bool sel = a.hex == selectedAc, hov = (int)i == hoveredAc;
-                const Color c = a.ground ? Color{ 120, 135, 150, 255 } : a.mil ? kMilitaryColor : (a.hasAlt ? altColor(a.altFt) : Color{ 190, 205, 220, 255 });
+                const Color c = a.ground ? Color{ 96, 106, 120, 255 } : a.mil ? kMilitaryColor : (a.hasAlt ? altColor(a.altFt) : Color{ 170, 180, 192, 255 });
                 if ((trails || sel) && a.trail.size() > 1) {
                     Vector2 prev = latLonToScreen(a.trail[0].first, a.trail[0].second);
                     for (size_t k = 1; k < a.trail.size(); ++k) {
@@ -3234,7 +3234,7 @@ int main(int argc, char** argv) {
             if (occludedByBody(cam.position, position, earthR)) continue;
             const Vector2 p = projectToScreen(position);
             if (p.x < 0 || p.x > screenWidth || p.y < 0 || p.y > screenHeight) continue;
-            const Color fill = city.capital ? Color{ 255, 214, 110, 255 } : Color{ 236, 241, 250, 255 };
+            const Color fill = city.capital ? Color{ 226, 232, 242, 255 } : Color{ 150, 162, 178, 255 };  // steel tones: cities stay quiet so the traffic stands out
             DrawCircleV(p, 3.2f * opts.markerScale, Fade(BLACK, 0.6f));
             DrawCircleV(p, 2.1f * opts.markerScale, fill);
             const long long cell = (long long)((int)(p.x / 90.0f)) * 100003LL + (int)(p.y / 16.0f);
@@ -3910,7 +3910,7 @@ int main(int argc, char** argv) {
     auto drawInfoPanels = [&]() {
         const int px = (int)screenWidth - 300;
         const int py0 = (int)toolbarHeight + 10;
-        const Color classCol[] = { { 170, 222, 255, 255 }, { 110, 240, 170, 255 }, { 190, 160, 255, 255 }, { 255, 206, 100, 255 } };
+        const Color classCol[] = { { 205, 214, 226, 255 }, { 188, 198, 212, 255 }, { 150, 160, 176, 255 }, { 236, 240, 246, 255 } };
         const char* classNames[] = { "Low Earth orbit (LEO)", "Medium Earth orbit (MEO)", "Geostationary / geosynchronous", "Highly elliptical (HEO)" };
         hoverTitle.clear(); hoverDetail.clear();
         if (!routeForced) routeShown = false;

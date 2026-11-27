@@ -88,8 +88,8 @@ void main(){
     if (dark > 0.5) {
         float l = dot(c, vec3(0.299, 0.587, 0.114));
         vec3 chroma = c - vec3(l);
-        float dl = 0.055 + 0.82 * pow(1.0 - l, 1.1);
-        c = vec3(dl) * vec3(0.95, 0.98, 1.06) + chroma * 0.85;
+        float dl = 0.035 + 0.66 * pow(1.0 - l, 1.15);
+        c = vec3(dl) * vec3(0.93, 0.98, 1.08) + chroma * 0.32;
     }
     finalColor = vec4(c, t.a) * fragColor;
 })";
@@ -149,7 +149,7 @@ void main(){
     float d = dot(n, sunEcef);
     float night = smoothstep(0.08, -0.08, d);
     float twilight = exp(-pow(d / 0.07, 2.0));
-    vec4 col = vec4(0.02, 0.03, 0.07, night * 0.42);
-    col += vec4(0.42, 0.16, 0.03, twilight * 0.22);
+    vec4 col = vec4(0.01, 0.02, 0.04, night * 0.50);
+    col += vec4(0.28, 0.36, 0.48, twilight * 0.12);  // a cool steel band along the terminator, not a sunset
     finalColor = col;
 })";
