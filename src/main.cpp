@@ -658,26 +658,6 @@ int main(int argc, char** argv) {
         lat = std::atan(std::sinh(PI_D * (1.0 - 2.0 * v))) / DEG;
     };
 
-    struct MessierEntry {
-        const char* id;
-        const char* name;
-        const char* type;
-        double raHours;
-        double decDeg;
-        float mag;
-        Color col;
-    };
-    static const MessierEntry kDeepSky[] = {
-        { "M31", "Andromeda Galaxy", "Spiral galaxy", 0.712, 41.27, 3.44f, { 180, 210, 255, 255 } },
-        { "M42", "Orion Nebula", "Diffuse nebula", 5.588, -5.39, 4.0f, { 255, 170, 200, 255 } },
-        { "M45", "Pleiades", "Open cluster", 3.790, 24.11, 1.6f, { 160, 225, 255, 255 } },
-        { "M13", "Hercules Cluster", "Globular cluster", 16.695, 36.46, 5.8f, { 220, 230, 255, 255 } },
-        { "M8", "Lagoon Nebula", "Emission nebula", 18.060, -24.38, 6.0f, { 255, 160, 180, 255 } },
-        { "M57", "Ring Nebula", "Planetary nebula", 18.893, 33.03, 8.8f, { 170, 255, 220, 255 } },
-        { "M7", "Ptolemy's Cluster", "Open cluster", 17.898, -34.82, 3.3f, { 200, 220, 255, 255 } },
-        { "M44", "Beehive Cluster", "Open cluster", 8.667, 19.67, 3.7f, { 210, 225, 255, 255 } },
-    };
-
     struct MeteorShower {
         const char* name;
         const char* peak;
@@ -755,12 +735,10 @@ int main(int argc, char** argv) {
             }
         } else if (h.targetType == 5) {
             setMode(Mode::Sky);
-            for (const auto& dso : kDeepSky) {
-                if (std::string(dso.id) == h.searchName) {
-                    const double ra = dso.raHours * 15.0 * DEG, dec = dso.decDeg * DEG;
-                    const Vec3d dir{ std::cos(dec) * std::cos(ra), std::cos(dec) * std::sin(ra), std::sin(dec) };
+            for (const DeepSkyObject& dso : deepSky) {
+                if (dso.name == h.searchName) {
                     double e, n, u;
-                    toHorizontalFrame(precessToDate(dir), e, n, u);
+                    toHorizontalFrame(precessToDate(dso.direction), e, n, u);
                     skyAz = (float)std::atan2(e, n);
                     skyEl = (float)std::asin(std::clamp(u / std::sqrt(e * e + n * n + u * u), -1.0, 1.0));
                     skyFov = 65.0f;
@@ -967,6 +945,27 @@ int main(int argc, char** argv) {
                                    paused = true; follow = true; distGoal = dist = 0.35f; });
                 J(147.0, "iss-model");
                 atT(148.0, [&]() {});
+            }
+            if (scenario == "smoke") {
+                // Quick visual check of the panels and views touched by recent merges.
+                atT(2.0, [&]() { opts.showHints = false; setMode(Mode::Globe); layersOpen = true; });
+                shotT(4.0, "layers-globe");
+                atT(4.5, [&]() { setMode(Mode::Sky); layersOpen = true; opts.showDeepSky = true; opts.showConst = true; });
+                shotT(6.5, "layers-sky");
+                atT(7.0, [&]() { layersOpen = false; simTime = utcToUnix(2026, 12, 20, 3, 0, 0); paused = true; for (int i = 0; i < kNumHighlights; ++i) if (std::string(kHighlights[i].searchName) == "M31") applyHighlight(i); });
+                shotT(9.0, "sky-m31");
+                atT(9.2, [&]() { paused = false; simTime = nowUnix(); });
+                atT(9.5, [&]() { setMode(Mode::Map); layersOpen = true; });
+                shotT(11.5, "layers-map");
+                atT(12.0, [&]() { layersOpen = false; setMode(Mode::Globe); presetsOpen = true; });
+                shotT(14.0, "presets");
+                atT(14.5, [&]() { presetsOpen = false; tourActive = true; tourTimer = 0.0; applyHighlight(tourIndex); });
+                shotT(17.0, "tour");
+                atT(17.5, [&]() { tourActive = false; opts.satCategory = 2; });
+                shotT(20.0, "filter-starlink");
+                atT(20.5, [&]() { opts.satCategory = 0; helpOpen = true; });
+                shotT(22.5, "help");
+                atT(23.0, [&]() {});
             }
             if (scenario == "perf2") {
                 atT(0.3, [&]() { ClearWindowState(FLAG_VSYNC_HINT); opts.showHints = false; setMode(Mode::Map); mapWidthPx = screenWidth * 1.1; mapCentreU = 0.5; mapCentreV = 0.4; });
@@ -3268,7 +3267,7 @@ int main(int argc, char** argv) {
     auto drawPresetsPopup = [&]() {
         if (presetsOpen) {
             const float pw = 360.0f, lx = std::min(presetsX, screenWidth - pw - 8.0f), py = toolbarHeight + 6.0f;
-            const float ph = 492.0f;
+            const float ph = 74.0f + kNumHighlights * 32.0f;
             uiShadowBox({ lx, py, pw, ph }, 0.94f);
             ui.region({ lx, py, pw, ph });
             float y = py + 10.0f;
@@ -3472,7 +3471,7 @@ int main(int argc, char** argv) {
             }
         }
         if (tourActive) {
-            const std::string th = TextFormat("Tour Mode: %s  (F4 or Esc to exit)", kHighlights[tourIndex].name);
+            const std::string th = TextFormat("Tour Mode: %s  (F11 or Esc to exit)", kHighlights[tourIndex].name);
             const int hw = UiMeasure(th.c_str(), 13);
             UiText(th.c_str(), (int)(screenWidth - hw) / 2, (int)screenHeight - (opts.showStatus ? 22 : 0) - 20, 13, { 130, 220, 255, 255 });
         } else if (opts.showHints && !helpOpen && !settingsOpen && !layersOpen && !presetsOpen && !(mode == Mode::Map && opts.radarOn)) {
