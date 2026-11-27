@@ -43,6 +43,7 @@ struct Options {
     float markerScale = 1.0f, starBright = 1.0f;
     bool showClouds = true, showSpecular = true, showNightLights = true, showConst = true, showCities = true;
     bool satLEO = true, satMEO = true, satGEO = true, satHEO = true;
+    int satCategory = 0;
     bool acGround = true, acTrails = true; int acMinAlt = 0;
     bool shipCargo = true, shipTanker = true, shipPass = true, shipFish = true, shipOther = true, shipMoving = false;
     int baseMap = 1;
@@ -74,19 +75,19 @@ struct Options {
         auto B = [&](const char* k, bool& v) { if (kv.count(k)) v = std::atoi(kv[k].c_str()) != 0; };
         auto F = [&](const char* k, float& v) { if (kv.count(k)) v = (float)std::atof(kv[k].c_str()); };
         I("units", units); B("localTime", localTime); F("markerScale", markerScale); F("starBright", starBright); B("showClouds", showClouds); B("showNightLights", showNightLights); B("showConst", showConst); B("showCities", showCities); B("showSpecular", showSpecular);
-        B("satLEO", satLEO); B("satMEO", satMEO); B("satGEO", satGEO); B("satHEO", satHEO); B("acGround", acGround); B("acTrails", acTrails); I("acMinAlt", acMinAlt);
+        B("satLEO", satLEO); B("satMEO", satMEO); B("satGEO", satGEO); B("satHEO", satHEO); I("satCategory", satCategory); B("acGround", acGround); B("acTrails", acTrails); I("acMinAlt", acMinAlt);
         B("shipCargo", shipCargo); B("shipTanker", shipTanker); B("shipPass", shipPass); B("shipFish", shipFish); B("shipOther", shipOther); B("shipMoving", shipMoving);
         I("baseMap", baseMap); F("radarOpacity", radarOpacity); B("showHints", showHints); B("vsync", vsync); B("showStatus", showStatus); B("showMissions", showMissions); B("showDeepSky", showDeepSky); I("missionTrails", missionTrails); I("passHours", passHours); I("passMinEl", passMinEl); I("alertLead", alertLead); B("passAlerts", passAlerts); B("osNotify", osNotify);
         if (kv.count("satCats")) { const std::string& sc = kv["satCats"]; for (int i = 0; i < 6 && i < (int)sc.size(); ++i) satCat[i] = sc[i] != '0'; }
         if (kv.count("ais_nmea")) aisNmea = kv["ais_nmea"];
-        missionTrails = std::clamp(missionTrails, 0, 2); passHours = std::clamp(passHours, 0, 2); passMinEl = std::clamp(passMinEl, 0, 3); alertLead = std::clamp(alertLead, 0, 2); units = std::clamp(units, 0, 2); baseMap = std::clamp(baseMap, 0, 3); acMinAlt = std::clamp(acMinAlt, 0, 3);
+        missionTrails = std::clamp(missionTrails, 0, 2); passHours = std::clamp(passHours, 0, 2); passMinEl = std::clamp(passMinEl, 0, 3); alertLead = std::clamp(alertLead, 0, 2); units = std::clamp(units, 0, 2); baseMap = std::clamp(baseMap, 0, 3); acMinAlt = std::clamp(acMinAlt, 0, 3); satCategory = std::clamp(satCategory, 0, 6);
         markerScale = std::clamp(markerScale, 0.5f, 2.5f); starBright = std::clamp(starBright, 0.4f, 2.0f); radarOpacity = std::clamp(radarOpacity, 0.2f, 1.0f);
     }
     void save() const {
         std::ofstream f(path());
         f << "# spacemap options (edited from the Settings panel). ais_nmea=host:port adds a raw NMEA AIS feed, e.g. a local receiver.\n";
         f << "units=" << units << "\nlocalTime=" << localTime << "\nmarkerScale=" << markerScale << "\nstarBright=" << starBright << "\nshowClouds=" << showClouds << "\nshowNightLights=" << showNightLights << "\nshowConst=" << showConst << "\nshowCities=" << showCities
-          << "\nshowSpecular=" << showSpecular << "\nsatLEO=" << satLEO << "\nsatMEO=" << satMEO << "\nsatGEO=" << satGEO << "\nsatHEO=" << satHEO
+          << "\nshowSpecular=" << showSpecular << "\nsatLEO=" << satLEO << "\nsatMEO=" << satMEO << "\nsatGEO=" << satGEO << "\nsatHEO=" << satHEO << "\nsatCategory=" << satCategory
           << "\nacGround=" << acGround << "\nacTrails=" << acTrails << "\nacMinAlt=" << acMinAlt << "\nshipCargo=" << shipCargo << "\nshipTanker=" << shipTanker
           << "\nshipPass=" << shipPass << "\nshipFish=" << shipFish << "\nshipOther=" << shipOther << "\nshipMoving=" << shipMoving << "\nbaseMap=" << baseMap
           << "\nradarOpacity=" << radarOpacity << "\nshowHints=" << showHints << "\nvsync=" << vsync << "\nshowStatus=" << showStatus << "\nshowMissions=" << showMissions << "\nshowDeepSky=" << showDeepSky << "\nmissionTrails=" << missionTrails << "\npassHours=" << passHours << "\npassMinEl=" << passMinEl << "\nalertLead=" << alertLead << "\npassAlerts=" << passAlerts << "\nosNotify=" << osNotify << "\nsatCats=" << (satCat[0] ? 1 : 0) << (satCat[1] ? 1 : 0) << (satCat[2] ? 1 : 0) << (satCat[3] ? 1 : 0) << (satCat[4] ? 1 : 0) << (satCat[5] ? 1 : 0) << "\nais_nmea=" << aisNmea << "\n";

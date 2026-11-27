@@ -151,6 +151,35 @@ inline void classify(Entity& e, bool fromStations) {
     e.dot = (e.kind == Kind::Constellation) || (e.kind == Kind::Satellite && !e.labeled);
 }
 
+inline bool matchesSatCategory(const Entity& e, int cat) {
+    if (cat <= 0) return true;
+    const std::string& n = e.name;
+    switch (cat) {
+        case 1: // Stations & Crewed
+            return e.kind == Kind::Station || e.kind == Kind::Ship ||
+                   has(n, "ISS") || has(n, "TIANGONG") || has(n, "ZARYA") || has(n, "TIANHE") ||
+                   has(n, "DRAGON") || has(n, "SOYUZ") || has(n, "SHENZHOU") || has(n, "CYGNUS");
+        case 2: // Starlink
+            return has(n, "STARLINK");
+        case 3: // Navigation (GNSS)
+            return has(n, "NAVSTAR") || has(n, "GPS ") || has(n, "GALILEO") ||
+                   has(n, "BEIDOU") || has(n, "GLONASS") || has(n, "COMPASS") || has(n, "QZSS");
+        case 4: // Weather & Earth Observation
+            return has(n, "GOES") || has(n, "NOAA") || has(n, "METOP") || has(n, "METEOSAT") ||
+                   has(n, "HIMAWARI") || has(n, "LANDSAT") || has(n, "SENTINEL") || has(n, "TERRA") ||
+                   has(n, "AQUA") || n == "HST";
+        case 5: // Comms
+            return has(n, "ONEWEB") || has(n, "IRIDIUM") || has(n, "GLOBALSTAR") ||
+                   has(n, "ORBCOMM") || has(n, "KUIPER");
+        case 6: { // Geostationary
+            const double apo = e.orbit.a * (1.0 + e.orbit.e);
+            return e.oclass == 2 || (apo > 35000.0 && e.orbit.e < 0.1);
+        }
+        default:
+            return true;
+    }
+}
+
 inline double parseBstar(const std::string& l1) {
     const std::string f = l1.substr(53, 8);
     const double mant = std::atoi(f.substr(1, 5).c_str()) * 1e-5;

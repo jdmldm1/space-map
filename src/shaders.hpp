@@ -134,3 +134,22 @@ void main(){
     col += vec3(0.35, 0.12, 0.02) * exp(-pow(d / 0.08, 2.0)) * 0.20;
     finalColor = vec4(col, 1.0);
 })";
+
+inline const char* FS_NIGHT_OVERLAY = R"(#version 330
+in vec2 uv;
+uniform vec3 sunEcef; uniform vec2 center; uniform vec2 span;
+out vec4 finalColor;
+void main(){
+    float u = center.x + (uv.x - 0.5) * span.x;
+    float v = center.y + (uv.y - 0.5) * span.y;
+    if (v < 0.0 || v > 1.0) { finalColor = vec4(0.0); return; }
+    float lon = (u - 0.5) * 6.2831853;
+    float lat = atan(sinh(3.1415927 * (1.0 - 2.0 * v)));
+    vec3 n = vec3(cos(lat) * cos(lon), cos(lat) * sin(lon), sin(lat));
+    float d = dot(n, sunEcef);
+    float night = smoothstep(0.08, -0.08, d);
+    float twilight = exp(-pow(d / 0.07, 2.0));
+    vec4 col = vec4(0.02, 0.03, 0.07, night * 0.42);
+    col += vec4(0.42, 0.16, 0.03, twilight * 0.22);
+    finalColor = col;
+})";

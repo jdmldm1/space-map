@@ -86,6 +86,8 @@ A spiral galaxy with the Sun at its true position and 17,000 real stars, zoomabl
 
 - City names on the globe and map, thinning out as you zoom out; zooming the globe all the way in hands over to the street-level map, and zooming the map all the way out returns to the globe
 - Satellite tracking with SGP4 orbit propagation, orbit lines, ground tracks, sunlit/shadow status and visible-pass prediction from your own location
+- Satellite constellation and mission filters (Space Stations & crewed, Starlink, GNSS/Navigation, Weather & Earth observation, Comms, Geostationary)
+- Curated presets and ambient auto-tour mode cycling through iconic perspectives
 - Live aircraft (ADS-B) with airline, aircraft type, registration country, climb state and emergency squawks
 - Live ship traffic (AIS) with flag, type, destination, ETA and dimensions, plus a decoder for your own NMEA AIS feed
 - Rain radar, GOES / Himawari cloud imagery, wind vectors and point weather
@@ -129,7 +131,7 @@ Drag to rotate, pan or look around; wheel to zoom; click an object for details; 
 | `V` | Spacecraft mission list |
 | `\` `F8` | Favourite the selected satellite, pass alerts on / off |
 | Space, `,` `.` `T` `N` `J` | Pause, speed, reverse, now, jump to a date |
-| `F1` `F2` `F12` | Help, settings, screenshot |
+| `F1` `F2` `F3` `F4` `F12` | Help, settings, presets, tour mode, screenshot |
 
 ---
 
