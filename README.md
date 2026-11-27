@@ -6,7 +6,7 @@
 
 ### Earth
 
-About 15,800 satellites on a 3D globe: NASA imagery, drifting clouds, orbits, ground tracks and pass predictions, with full catalogue details for any object you click.
+Satellites on a 3D globe: NASA imagery, drifting clouds, orbits, ground tracks and pass predictions, with full catalogue details for any object you click.
 
 ![Earth](docs/screenshots/earth.jpg)
 
