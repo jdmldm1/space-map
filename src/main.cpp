@@ -957,6 +957,10 @@ int main(int argc, char** argv) {
                 J(147.0, "iss-model");
                 atT(148.0, [&]() {});
             }
+            if (scenario == "defaults") {  // a normal launch, to check what the app opens on
+                shotT(14.0, "defaults");
+                atT(15.0, [&]() {});
+            }
             if (scenario == "tactical") {
                 atT(1.0, [&]() { opts.showHints = false; station = { true, 38.9, -77.04 }; ++stationVer; setTactical(true); mapWidthPx = screenWidth * 16.0; mapCentreU = (-77.04 + 180.0) / 360.0; const double sn = std::sin(38.9 * DEG); mapCentreV = 0.5 - std::log((1 + sn) / (1 - sn)) / (4 * PI_D); });
                 shotT(25.0, "tac-1");
@@ -4477,6 +4481,12 @@ int main(int argc, char** argv) {
             else if (matches.size() > 8) UiText(TextFormat("+%zu more", matches.size() - 8), x + w - 90, y + 14, 14, GRAY);
         }
     };
+
+    if ((scenario.empty() || scenario == "defaults") && shotPrefix.empty() && !benchMode) {  // a normal launch opens on the live map, with aircraft and ships on
+        setMode(Mode::Map);
+        adsb.setEnabled(true);
+        if (!shipsOn) toggleShips();
+    }
 
     while (!WindowShouldClose()) {
         beginFrame();
