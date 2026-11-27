@@ -40,6 +40,16 @@ The planets and Pluto, Halley's comet, the asteroid belt, Jupiter's Trojans and 
 
 ![Solar System](docs/screenshots/solar-system.jpg)
 
+### Spacecraft missions
+
+Real trajectories for 35 missions, drawn on the Solar System view and on the globe: Voyager and Pioneer, Galileo, Cassini at Saturn, Rosetta, MESSENGER, New Horizons, Parker, Lucy, Europa Clipper, JUICE, BepiColombo and more, plus the Apollo 11 Saturn V, Artemis I and II, JWST and a modelled Starship test flight. Missions are grouped as completed, active and planned; select one to see its status, distance, light time and speed at the simulated time, its milestones (launch, flybys, arrivals), and use **Replay** to watch the whole flight or **Previous / Next** to jump between milestones. Press `V` for the mission list.
+
+Paths come from NASA/JPL Horizons, so spacecraft line up with the planets they visit. Missions that have not launched appear only once JPL has published a predicted trajectory for them.
+
+### Live layers
+
+Earthquakes (USGS), wildfires, volcanoes and storms (NASA EONET), the aurora forecast with Kp index and solar X-ray flux (NOAA), upcoming rocket launches with countdowns and pads (Launch Library 2), and a decay watch for satellites in very low orbits. Available on the globe and the map.
+
 ### Milky Way
 
 A spiral galaxy with the Sun at its true position and 17,000 real stars, zoomable from megaparsecs down to the Sun's neighbourhood.
@@ -60,6 +70,12 @@ A spiral galaxy with the Sun at its true position and 17,000 real stars, zoomabl
 - Base maps: Blue Marble, OpenStreetMap (dark or standard) and NASA MODIS daily imagery
 - Sky view with planets, the Moon with phase, constellations and twilight colours
 - Solar System and Milky Way models with search, follow and scale bars
+- Type-specific icons: airliners, regional props, business jets, light planes, helicopters and fighters by ICAO type; cargo, tanker, passenger, fishing, sailing and tug silhouettes; satellite icons by kind (station, telescope, navigation, weather, Starlink, crew vehicles). Drawn from vector shapes at start-up, so there are no image files
+- 3D models of the ISS, Hubble, crew capsules and common satellite types when you follow or select one and zoom in (built in code, no model files)
+- Spacecraft missions: past, active and planned, with real JPL trajectories, milestones and replay
+- Live earthquakes, wildfires, volcanoes, storms, aurora forecast, space weather, rocket launches and a decay watch
+- Pass planner with a 3 or 7 day window and minimum elevation, desktop notifications before visible passes, calendar (`.ics`) export, favourites and satellite group filters
+- Sky view with 107 Messier deep-sky objects; eclipse predictions (`F9`); animated wind flow on the map; aircraft and ship history with a replay slider
 - Jump to any date and time, run time forward or backward, metric / imperial / nautical units, saved settings
 
 ---
@@ -87,6 +103,9 @@ Drag to rotate, pan or look around; wheel to zoom; click an object for details; 
 | `Tab`, `E` `M` `S` `P` `W` | Switch view: Earth, Map, Sky, Solar System, Milky Way |
 | `/` | Search |
 | `A` `B` `D` `K` `Z` `X` `I` | Map layers: aircraft, ships, radar, clouds, wind, weather, city names |
+| `F3` `F4` `F5` `F6` `F7` | Earthquakes, wildfires / volcanoes / storms, aurora and space weather, launches, decay watch |
+| `V` | Spacecraft mission list |
+| `\` `F8` | Favourite the selected satellite, pass alerts on / off |
 | Space, `,` `.` `T` `N` `J` | Pause, speed, reverse, now, jump to a date |
 | `F1` `F2` `F12` | Help, settings, screenshot |
 
@@ -111,9 +130,20 @@ On Windows use MinGW-w64 or Visual Studio with the same `cmake` commands. Pushin
 
 ## Data sources
 
-Satellite elements: CelesTrak. Stars: HYG database. Constellations: Stellarium. Earth imagery, clouds and MODIS: NASA GIBS. Base map: OpenStreetMap contributors. Aircraft: adsb.lol and OpenSky Network. Ships: Digitraffic (set `ais_nmea=host:port` in `spacemap.cfg` to add your own AIS stream). Radar: RainViewer. Weather: Open-Meteo. Planet positions: JPL approximate elements.
+Satellite elements: CelesTrak. Stars: HYG database. Constellations: Stellarium. Earth imagery, clouds and MODIS: NASA GIBS. Base map: OpenStreetMap contributors. Aircraft: adsb.lol and OpenSky Network. Ships: Digitraffic (set `ais_nmea=host:port` in `spacemap.cfg` to add your own AIS stream). Radar: RainViewer. Weather: Open-Meteo. Planet positions: JPL approximate elements, with high-precision JPL Horizons tracks for the outer planets (1970-2040). Spacecraft trajectories: NASA/JPL Horizons. Earthquakes: USGS. Natural events: NASA EONET. Space weather and aurora: NOAA SWPC. Launches: Launch Library 2 (The Space Devs).
+
+Eclipse times come from the app's own Sun and Moon model and match published times to within minutes for recent eclipses. Aircraft and ship history is recorded locally while those layers are on, kept for three hours and saved in the data folder (`history_*.bin`).
 
 Layers fetch data only while switched on, and only for the area in view.
+
+### Updating spacecraft data
+
+The trajectories in `assets/missions/` are generated from JPL Horizons and bundled, so the app works offline. To refresh them or add a mission (add a line to `MISSIONS` in the script and the app's mission table in `src/missions.hpp`):
+
+```bash
+python3 scripts/gen_missions.py            # everything
+python3 scripts/gen_missions.py voyager1   # one mission
+```
 
 ---
 

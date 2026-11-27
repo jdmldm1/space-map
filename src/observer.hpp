@@ -7,11 +7,17 @@
 #include "catalog.hpp"
 #include "orbit.hpp"
 
+// Geocentric Moon position (km, equatorial J2000-ish). Principal terms of the lunar theory (Meeus): about 0.1 degree.
 inline Vec3d moonPos(double du) {
-    const double Lp = (218.316 + 13.176396 * du) * DEG, Mp = (134.963 + 13.064993 * du) * DEG,
-                 F = (93.272 + 13.229350 * du) * DEG;
-    const double lon = Lp + 6.289 * DEG * std::sin(Mp), lat = 5.128 * DEG * std::sin(F);
-    const double r = 385001.0 - 20905.0 * std::cos(Mp), eps = (23.439 - 4e-7 * du) * DEG;
+    const double Lp = (218.3165 + 13.17639648 * du) * DEG, D = (297.8502 + 12.19074912 * du) * DEG, M = (357.5291 + 0.98560028 * du) * DEG;
+    const double Mp = (134.9634 + 13.06499295 * du) * DEG, F = (93.2721 + 13.22935025 * du) * DEG;
+    const double lonDeg = 6.289 * std::sin(Mp) + 1.274 * std::sin(2 * D - Mp) + 0.658 * std::sin(2 * D) + 0.214 * std::sin(2 * Mp) - 0.186 * std::sin(M) - 0.114 * std::sin(2 * F) +
+                          0.059 * std::sin(2 * D - 2 * Mp) + 0.057 * std::sin(2 * D - M - Mp) + 0.053 * std::sin(2 * D + Mp) + 0.046 * std::sin(2 * D - M) + 0.041 * std::sin(Mp - M) -
+                          0.035 * std::sin(D) - 0.030 * std::sin(Mp + M);
+    const double latDeg = 5.128 * std::sin(F) + 0.2806 * std::sin(Mp + F) + 0.2777 * std::sin(Mp - F) + 0.1732 * std::sin(2 * D - F) + 0.0554 * std::sin(2 * D - Mp + F) +
+                          0.0463 * std::sin(2 * D - Mp - F) + 0.0326 * std::sin(2 * D + F) + 0.0172 * std::sin(2 * Mp + F);
+    const double lon = Lp + lonDeg * DEG, lat = latDeg * DEG;
+    const double r = 385001.0 - 20905.0 * std::cos(Mp) - 3699.0 * std::cos(2 * D - Mp) - 2956.0 * std::cos(2 * D) - 570.0 * std::cos(2 * Mp), eps = (23.439 - 4e-7 * du) * DEG;
     const double cb = std::cos(lat), sb = std::sin(lat), cl = std::cos(lon), sl = std::sin(lon);
     return { r * cb * cl, r * (cb * sl * std::cos(eps) - sb * std::sin(eps)), r * (cb * sl * std::sin(eps) + sb * std::cos(eps)) };
 }
@@ -60,27 +66,48 @@ inline Look lookAngles(const Station& g, const Vec3d& sat, double era, double R)
     return l;
 }
 
-struct Pass { double aos, los, maxEl; bool vis; };
+struct Pass { double aos, los, maxEl; bool vis; double peak = 0, aosAz = 0, peakAz = 0, losAz = 0; };
 
-inline std::vector<Pass> computePasses(const Entity& e, const Station& g, double t0, double R) {
+// Passes of `e` above the horizon, starting at t0. Rise and set times are refined by bisection to about a second, and
+// passes that never climb above minElRad are dropped. "vis" means the satellite is sunlit while the observer is in twilight or darkness.
+inline std::vector<Pass> computePasses(const Entity& e, const Station& g, double t0, double R, double horizonHours = 24.0, size_t maxPasses = 5, double minElRad = 0.0) {
     std::vector<Pass> out;
-    const double step = 20.0, horizon = 24.0 * 3600.0;
+    const double step = horizonHours > 48.0 ? 30.0 : 20.0, horizon = horizonHours * 3600.0;
+    auto lookAt = [&](double t) { return lookAngles(g, e.orbit.positionAt(t), eraAt(t), R); };
+    auto crossing = [&](double a, double b) {  // el(a) and el(b) are on opposite sides of the horizon
+        const bool aboveA = lookAt(a).el > 0;
+        for (int k = 0; k < 7 && b - a > 1.0; ++k) {
+            const double m = 0.5 * (a + b);
+            if ((lookAt(m).el > 0) == aboveA) a = m; else b = m;
+        }
+        return 0.5 * (a + b);
+    };
     bool in = false;
     Pass cur{};
+    double prevT = t0;
+    double prevEl = lookAt(t0).el;
     for (double t = t0; t <= t0 + horizon; t += step) {
-        const Vec3d sp = e.orbit.positionAt(t);
-        const Look l = lookAngles(g, sp, eraAt(t), R);
+        const Look l = lookAt(t);
         if (l.el > 0) {
-            if (!in) { in = true; cur = { t, t, l.el, false }; }
-            cur.los = t; cur.maxEl = std::max(cur.maxEl, l.el);
-
-            const Vec3d sd = sunDirEci(t), o = stationEci(g, eraAt(t), 1.0);
+            if (!in) {
+                in = true;
+                const double aos = t == t0 ? t0 : crossing(prevT, t);
+                cur = { aos, t, l.el, false, t, lookAt(aos).az, l.az, 0 };
+            }
+            cur.los = t;
+            if (l.el > cur.maxEl) { cur.maxEl = l.el; cur.peak = t; cur.peakAz = l.az; }
+            const Vec3d sd = sunDirEci(t), sp = e.orbit.positionAt(t), o = stationEci(g, eraAt(t), 1.0);
             if (sunlit(sp, sd, R) && o.x * sd.x + o.y * sd.y + o.z * sd.z < -0.1045) cur.vis = true;
         } else if (in) {
-            in = false; out.push_back(cur);
-            if (out.size() >= 5) return out;
+            in = false;
+            cur.los = crossing(prevT, t);
+            cur.losAz = lookAt(cur.los).az;
+            if (cur.maxEl >= minElRad) out.push_back(cur);
+            if (out.size() >= maxPasses) return out;
         }
+        prevT = t; prevEl = l.el;
     }
-    if (in) out.push_back(cur);
+    (void)prevEl;
+    if (in) { cur.losAz = lookAt(cur.los).az; if (cur.maxEl >= minElRad) out.push_back(cur); }
     return out;
 }

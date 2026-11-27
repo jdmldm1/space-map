@@ -1,0 +1,92 @@
+# key,unix,label,closest_approach_au
+pioneer10,123811200,Jupiter flyby,0.00201
+pioneer11,155260800,Jupiter flyby,0.00356
+pioneer11,305078400,Saturn flyby,0.00321
+voyager1,289526400,Jupiter flyby,0.00615
+voyager1,342921600,Saturn flyby,0.00123
+voyager2,300412800,Jupiter flyby,0.00485
+voyager2,367632000,Saturn flyby,0.00182
+voyager2,506995200,Uranus flyby,0.00242
+voyager2,620006400,Neptune flyby,0.00189
+galileo,634608000,Venus flyby,0.00098
+galileo,660700800,Earth flyby,0.00080
+galileo,723859200,Earth flyby,0.00199
+galileo,818380800,Jupiter flyby,0.00219
+galileo,835920000,Jupiter arrival (orbit),0.00277
+galileo,978048000,Jupiter arrival (orbit),0.00276
+galileo,1036454400,Jupiter flyby,0.00417
+cassini,893635200,Venus flyby,0.00164
+cassini,930268800,Venus flyby,0.00085
+cassini,934934400,Earth flyby,0.00138
+cassini,978134400,Jupiter flyby,0.06553
+cassini,1088640000,Saturn arrival (orbit),0.00043
+stardust,979516800,Earth flyby,0.00191
+stardust,1137283200,Earth flyby,0.00171
+stardust,1231977600,Earth flyby,0.00079
+rosetta,1109980800,Earth flyby,0.00029
+rosetta,1194998400,Earth flyby,0.00074
+rosetta,1258070400,Earth flyby,0.00184
+rosetta,1172361600,Mars flyby,0.00038
+messenger,1200355200,Mercury flyby,0.00070
+messenger,1223251200,Mercury flyby,0.00111
+messenger,1254268800,Mercury flyby,0.00019
+messenger,1300492800,Mercury arrival (orbit),0.00002
+messenger,1357171200,Mercury flyby,0.00002
+messenger,1407283200,Mercury arrival (orbit),0.00002
+messenger,1161648000,Venus flyby,0.00194
+messenger,1181088000,Venus flyby,0.00022
+messenger,1123027200,Earth flyby,0.00065
+dawn,1234915200,Mars flyby,0.00005
+newhorizons,1172620800,Jupiter flyby,0.01565
+hayabusa2,1449100800,Earth flyby,0.00136
+hayabusa2,1607212800,Earth flyby,0.00089
+osirisrex,1506124800,Earth flyby,0.00118
+osirisrex,1695600000,Earth flyby,0.00155
+osirisrex,1758672000,Earth flyby,0.00119
+osirisrex,1805155200,Earth flyby,0.00063
+osirisrex,1870819200,Earth flyby,0.00019
+juno,1381363200,Earth flyby,0.00122
+juno,1467676800,Jupiter arrival (orbit),0.00050
+parker,1538524800,Venus flyby,0.00485
+parker,1577404800,Venus flyby,0.00318
+parker,1594425600,Venus flyby,0.00190
+parker,1613865600,Venus flyby,0.00216
+parker,1634342400,Venus flyby,0.00528
+parker,1692662400,Venus flyby,0.00661
+parker,1730937600,Venus flyby,0.00292
+parker,1770076800,Venus flyby,0.01062
+lucy,1665878400,Earth flyby,0.00164
+lucy,1734048000,Earth flyby,0.00116
+lucy,1924473600,Earth flyby,0.00238
+psyche,1778889600,Mars flyby,0.00051
+bepicolombo,1633132800,Mercury flyby,0.00007
+bepicolombo,1655942400,Mercury flyby,0.00150
+bepicolombo,1687219200,Mercury flyby,0.00041
+bepicolombo,1725494400,Mercury arrival (orbit),0.00017
+bepicolombo,1793059200,Mercury arrival (orbit),0.00002
+bepicolombo,1602720000,Venus flyby,0.00083
+bepicolombo,1628640000,Venus flyby,0.00205
+bepicolombo,1586476800,Earth flyby,0.00058
+juice,1756598400,Venus flyby,0.00103
+juice,1724198400,Earth flyby,0.00029
+juice,1790553600,Earth flyby,0.00316
+juice,1863388800,Earth flyby,0.00148
+europaclipper,1796342400,Earth flyby,0.00109
+europaclipper,1740873600,Mars flyby,0.00149
+europaclipper,1902096000,Jupiter flyby,0.00598
+europaclipper,1919548800,Jupiter arrival (orbit),0.00390
+ulysses,697593600,Jupiter flyby,0.00661
+solarorbiter,1609113600,Venus flyby,0.00321
+solarorbiter,1628467200,Venus flyby,0.00135
+solarorbiter,1662249600,Venus flyby,0.00067
+solarorbiter,1739923200,Venus flyby,0.00143
+solarorbiter,1798156800,Venus flyby,0.00047
+solarorbiter,1836950400,Venus flyby,0.00371
+solarorbiter,1875830400,Venus flyby,0.00282
+solarorbiter,1914624000,Venus flyby,0.00134
+solarorbiter,1637971200,Earth flyby,0.00122
+hera,1741824000,Mars flyby,0.00236
+escapade,1772323200,Earth flyby,0.01336
+escapade,1782777600,Earth flyby,0.00362
+escapade,1794009600,Earth flyby,0.00083
+escapade,1820448000,Mars flyby,0.00005

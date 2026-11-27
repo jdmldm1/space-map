@@ -35,7 +35,7 @@ struct Entity {
     double altKm = 0;
 
     std::string intl, group;
-    int launchYear = 0, launchNo = 0, rev = 0, oclass = 0;
+    int launchYear = 0, launchNo = 0, rev = 0, oclass = 0, cat = 5;
     double bstar = 0, revPerDay = 0;
 };
 
@@ -110,6 +110,23 @@ inline double tleEpochUnix(int yy, double doy) {
 
 inline bool has(const std::string& s, const char* k) { return s.find(k) != std::string::npos; }
 
+inline constexpr int kSatCategories = 6;
+inline const char* satCategoryName(int c) {
+    static const char* names[kSatCategories] = { "Starlink", "Other broadband (OneWeb, Iridium ...)", "Navigation (GPS, Galileo ...)", "Weather and Earth observation", "Stations and crew vehicles", "Everything else" };
+    return names[c < 0 || c >= kSatCategories ? kSatCategories - 1 : c];
+}
+
+// Groups satellites for the filter toggles, using the group names produced by satGroup().
+inline int satCategory(const Entity& e) {
+    const std::string& g = e.group;
+    if (e.kind == Kind::Station || e.kind == Kind::Ship) return 4;
+    if (has(g, "Starlink")) return 0;
+    if (has(g, "OneWeb") || has(g, "Iridium") || has(g, "Globalstar") || has(g, "Orbcomm") || has(g, "Kuiper")) return 1;
+    if (has(g, "GPS") || has(g, "Galileo") || has(g, "BeiDou") || has(g, "GLONASS")) return 2;
+    if (has(g, "weather") || has(g, "MetOp") || has(g, "Meteosat") || has(g, "Himawari") || has(g, "Landsat") || has(g, "Sentinel") || has(g, "Earth Observing")) return 3;
+    return 5;
+}
+
 inline void classify(Entity& e, bool fromStations) {
     const std::string& n = e.name;
     const double apo = e.orbit.a * (1.0 + e.orbit.e);
@@ -176,6 +193,7 @@ inline int loadTleFile(const std::string& path, std::unordered_set<int>& seen, s
             (void)perigee;
         }
         classify(e, fromStations);
+        e.cat = satCategory(e);
         out.push_back(std::move(e));
         ++count;
     }
