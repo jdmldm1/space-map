@@ -89,6 +89,7 @@ A spiral galaxy with the Sun at its true position and 17,000 real stars, zoomabl
 - Satellite constellation filter plus per-group toggles in the Layers panel (Space Stations & crewed, Starlink, GNSS/Navigation, Weather & Earth observation, Comms, Geostationary)
 - 3D models for the selected satellite, including the ISS, Tiangong, Hubble, JWST, Soyuz, cargo craft, Starlink, Iridium, GPS, weather and geostationary satellites, rocket bodies and debris
 - Curated presets and highlights (`F10`) and an ambient auto-tour (`F11`) that cycles through iconic perspectives, including deep-sky objects and meteor shower radiants
+- Tactical map view (`'` or the Tactical button on the Map): the map with a labelled lat/lon graticule, UTM zones and latitude bands, a scale bar, a live DMS and UTM cursor readout, and NATO-style track symbols with velocity leaders and data blocks. Military tracks stand out and civilian traffic thins to dots when the screen is crowded. A military-contacts list shows the nearest first (click one to select it), the selected track gets a bearing and range line and 1, 5 and 10 minute position ticks, and holding Shift measures range and bearing to the cursor
 - Military vs civilian filter for aircraft and ships: a toolbar button (or `[`) cycles All, Civilian and Military. Military traffic is ringed in orange; it comes from the ADS-B database flag, military hex blocks and callsigns, and AIS type 35 / 55
 - A "Learn more" card beside the info panel for any satellite, aircraft, ship or mission: a photo, a short Wikipedia summary, a details list (satellite owner, launch site, status, radio frequencies; aircraft owner and airline; ship builder, operator and tonnage) and links to CelesTrak, N2YO, Heavens-Above, FlightAware, Flightradar24, MarineTraffic and more. Aircraft also get their route with distance remaining and an estimated arrival, drawn as a great-circle line on the map. Satellites get a rough orbit-lifetime estimate and current space weather. Mission cards link to the agency's official page. Results are cached on disk
 - Live aircraft (ADS-B) with airline, aircraft type, registration country, climb state and emergency squawks
@@ -131,6 +132,7 @@ Drag to rotate, pan or look around; wheel to zoom; click an object for details; 
 | `/` | Search |
 | `A` `B` `D` `K` `Z` `X` `I` | Map layers: aircraft, ships, radar, clouds, wind, weather, city names |
 | `[` | Aircraft and ships: all / civilian / military |
+| `'`, hold Shift | Tactical map view; measure range and bearing while tactical |
 | `F3` `F4` `F5` `F6` `F7` | Earthquakes, wildfires / volcanoes / storms, aurora and space weather, launches, decay watch |
 | `V` | Spacecraft mission list |
 | `\` `F8` | Favourite the selected satellite, pass alerts on / off |

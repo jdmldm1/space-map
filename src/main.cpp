@@ -218,6 +218,7 @@ int main(int argc, char** argv) {
     int tourIndex = 0;
     std::string pendingShot;
     auto toggleShips = [&]() { shipsOn = !shipsOn; ais.setEnabled(shipsOn); };
+    std::function<void(bool)> setTactical;  // assigned with the tactical view helpers, before the map scene
     auto toggleRadar = [&]() { opts.radarOn = !opts.radarOn; radarFeed.setEnabled(opts.radarOn); };
     std::vector<Aircraft> aircraftList;
     unsigned acVer = 0;
@@ -956,6 +957,20 @@ int main(int argc, char** argv) {
                 J(147.0, "iss-model");
                 atT(148.0, [&]() {});
             }
+            if (scenario == "tactical") {
+                atT(1.0, [&]() { opts.showHints = false; station = { true, 38.9, -77.04 }; ++stationVer; setTactical(true); mapWidthPx = screenWidth * 16.0; mapCentreU = (-77.04 + 180.0) / 360.0; const double sn = std::sin(38.9 * DEG); mapCentreV = 0.5 - std::log((1 + sn) / (1 - sn)) / (4 * PI_D); });
+                shotT(25.0, "tac-1");
+                atT(25.5, [&]() { for (const Aircraft& a : aircraftList) if (a.mil && !a.ground) { selectedAc = a.hex; break; } });
+                shotT(30.0, "tac-2");
+                atT(30.5, [&]() { selectedAc.clear(); mapWidthPx = screenWidth * 4.0; });
+                shotT(34.0, "tac-3");
+                atT(34.5, [&]() { opts.milFilter = 2; mapWidthPx = screenWidth * 10.0; });
+                shotT(38.0, "tac-4");
+                atT(38.5, [&]() { opts.milFilter = 0; selectedAc.clear(); station = { false, 0, 0 }; ++stationVer; mapWidthPx = screenWidth * 25.0; mapCentreU = (24.94 + 180.0) / 360.0; const double sn = std::sin(60.12 * DEG); mapCentreV = 0.5 - std::log((1 + sn) / (1 - sn)) / (4 * PI_D); });
+                atT(55.0, [&]() { for (const Vessel& v : ships) if (v.sog > 8.0 && v.len > 100) { selectedShip = v.mmsi; break; } });
+                shotT(60.0, "tac-ship");
+                atT(61.0, [&]() { setTactical(false); });
+            }
             if (scenario == "route") {
                 atT(1.0, [&]() { opts.showHints = false; setMode(Mode::Map); adsb.setEnabled(true); mapWidthPx = screenWidth * 7.0; mapCentreU = (-80.0 + 180.0) / 360.0; const double sn = std::sin(41.0 * DEG); mapCentreV = 0.5 - std::log((1 + sn) / (1 - sn)) / (4 * PI_D); });
                 atT(15.0, [&]() { for (const Aircraft& a : aircraftList) { selectedAc = a.hex; break; } routeForced = true; routeShown = true; routeCard.hasRoute = true; routeCard.fromName = "New York (JFK)"; routeCard.toName = "Chicago (ORD)"; routeCard.fromLat = 40.64; routeCard.fromLon = -73.78; routeCard.toLat = 41.98; routeCard.toLon = -87.9; });
@@ -1356,6 +1371,7 @@ int main(int argc, char** argv) {
             if (IsKeyPressed(KEY_F5)) { auroraOn = !auroraOn; hazards.setAurora(auroraOn); if (auroraOn) needGlobeOrMap(); }
             if (IsKeyPressed(KEY_F6)) { launchesOn = !launchesOn; launchFeed.setEnabled(launchesOn); if (launchesOn) needGlobeOrMap(); }
             if (IsKeyPressed(KEY_F7)) { decayOn = !decayOn; if (decayOn) needGlobeOrMap(); }
+            if (IsKeyPressed(KEY_APOSTROPHE)) setTactical(!opts.tactical);
             if (IsKeyPressed(KEY_LEFT_BRACKET)) { opts.milFilter = (opts.milFilter + 1) % 3; pushBanner(opts.milFilter == 0 ? "Showing all aircraft and ships" : opts.milFilter == 1 ? "Showing civilian aircraft and ships only" : "Showing military aircraft and ships only", Color{ 255, 150, 80, 255 }); }
             if (IsKeyPressed(KEY_V)) { missionsOpen = !missionsOpen; if (missionsOpen) layersOpen = settingsOpen = eclipsesOpen = false; }
             if (IsKeyPressed(KEY_F9)) { eclipsesOpen = !eclipsesOpen; if (eclipsesOpen) layersOpen = settingsOpen = missionsOpen = false; }
@@ -1878,6 +1894,174 @@ int main(int argc, char** argv) {
         EndMode3D();
     };
 
+    // ---- Tactical view (Map): dimmed map, geodesic range rings and bearing lines, NATO-style track symbols, velocity leaders ----
+    const Color tacCiv{ 80, 220, 255, 255 }, tacMil{ 255, 140, 60, 255 }, tacGreen{ 90, 255, 140, 255 };
+    static const double kUnitKm[3] = { 1.0, 1.609344, 1.852 };
+    static const char* kUnitName[3] = { "km", "mi", "nm" };
+    setTactical = [&](bool on) {
+        opts.tactical = on;
+        if (on) { if (mode != Mode::Map) setMode(Mode::Map); if (!adsb.enabled()) adsb.setEnabled(true); if (!shipsOn) toggleShips(); }
+    };
+    // The reference point for ranges and bearings: the ground station, or the middle of the screen when none is set.
+    auto tacRef = [&](double& lat, double& lon) -> bool {
+        if (station.set) { lat = station.lat; lon = station.lon; return true; }
+        screenToLatLon(screenWidth * 0.5, screenHeight * 0.5, lat, lon);
+        return false;
+    };
+    auto destPoint = [&](double lat, double lon, double brgDeg, double distKm) -> Vector2 {
+        const double d = distKm / 6371.0, b = brgDeg * DEG, la = lat * DEG, lo = lon * DEG;
+        const double la2 = std::asin(std::clamp(std::sin(la) * std::cos(d) + std::cos(la) * std::sin(d) * std::cos(b), -1.0, 1.0));
+        const double lo2 = lo + std::atan2(std::sin(b) * std::sin(d) * std::cos(la), std::cos(d) - std::sin(la) * std::sin(la2));
+        return latLonToScreen(la2 / DEG, lo2 / DEG);
+    };
+    auto bearingDeg = [&](double lat1, double lon1, double lat2, double lon2) {
+        const double p1 = lat1 * DEG, p2 = lat2 * DEG, dl = (lon2 - lon1) * DEG;
+        const double y = std::sin(dl) * std::cos(p2), x = std::cos(p1) * std::sin(p2) - std::sin(p1) * std::cos(p2) * std::cos(dl);
+        return std::fmod(std::atan2(y, x) / DEG + 360.0, 360.0);
+    };
+    // UTM coordinates (Kruger series) for the cursor readout.
+    auto toUtm = [](double lat, double lon, int& zone, char& band, double& east, double& north) {
+        zone = std::clamp((int)std::floor((lon + 180.0) / 6.0) + 1, 1, 60);
+        const double lon0 = (zone - 1) * 6.0 - 180.0 + 3.0;
+        const double a = 6378137.0, f = 1.0 / 298.257223563, k0 = 0.9996, n = f / (2.0 - f);
+        const double A = a / (1.0 + n) * (1.0 + n * n / 4.0 + n * n * n * n / 64.0);
+        const double al[3] = { n / 2.0 - 2.0 * n * n / 3.0 + 5.0 * n * n * n / 16.0, 13.0 * n * n / 48.0 - 3.0 * n * n * n / 5.0, 61.0 * n * n * n / 240.0 };
+        const double phi = lat * DEG, lam = (lon - lon0) * DEG, e = std::sqrt(f * (2.0 - f));
+        const double t = std::sinh(std::atanh(std::sin(phi)) - e * std::atanh(e * std::sin(phi)));
+        const double xi0 = std::atan2(t, std::cos(lam)), eta0 = std::atanh(std::sin(lam) / std::sqrt(1.0 + t * t));
+        double xi = xi0, eta = eta0;
+        for (int j = 1; j <= 3; ++j) { xi += al[j - 1] * std::sin(2.0 * j * xi0) * std::cosh(2.0 * j * eta0); eta += al[j - 1] * std::cos(2.0 * j * xi0) * std::sinh(2.0 * j * eta0); }
+        east = 500000.0 + k0 * A * eta;
+        north = k0 * A * xi + (lat < 0 ? 10000000.0 : 0.0);
+        band = "CDEFGHJKLMNPQRSTUVWX"[std::clamp((int)std::floor((lat + 80.0) / 8.0), 0, 19)];
+    };
+    auto fmtDeg = [](double v, bool isLat, double step) -> std::string {
+        const char hemi = isLat ? (v < 0 ? 'S' : 'N') : (v < 0 ? 'W' : 'E');
+        const double av = std::fabs(v);
+        int d = (int)std::floor(av + 1e-9);
+        const double rem = (av - d) * 60.0;
+        int m = (int)std::floor(rem + 1e-6);
+        const int sec = (int)std::lround((rem - m) * 60.0);
+        if (step >= 1.0) return std::string(TextFormat("%d\xC2\xB0%c", d, hemi));
+        if (step >= 1.0 / 60.0 - 1e-9) return std::string(TextFormat("%d\xC2\xB0%02d'%c", d, m, hemi));
+        return std::string(TextFormat("%d\xC2\xB0%02d'%02d\"%c", d, m, sec % 60, hemi));
+    };
+    // The tactical map's reference layer: a labelled lat/lon graticule, UTM zones and latitude bands, and a scale bar.
+    auto drawTacticalGrid = [&]() {
+        double la0, lo0, la1, lo1;
+        screenToLatLon(0, 0, la0, lo0); screenToLatLon(screenWidth, screenHeight, la1, lo1);
+        if (lo1 <= lo0) { lo0 = -180; lo1 = 180; }
+        const double latLo = std::min(la0, la1), latHi = std::max(la0, la1);
+        static const double steps[] = { 30, 10, 5, 2, 1, 0.5, 0.25, 0.1, 0.05, 1.0 / 60.0 * 2, 1.0 / 60.0, 1.0 / 120.0, 1.0 / 360.0, 1.0 / 720.0 };
+        double step = steps[0];
+        for (double st : steps) if (st / 360.0 * mapWidthPx >= 120.0) step = st; else break;
+        const Color gridC = Fade(Color{ 170, 215, 255, 255 }, 0.34f), textC = Color{ 205, 232, 255, 255 };
+        for (double lo = std::ceil(lo0 / step) * step; lo <= lo1; lo += step) {
+            const Vector2 a = latLonToScreen(0, lo);
+            DrawLineV({ a.x, 0 }, { a.x, screenHeight }, gridC);
+            { const std::string t = fmtDeg(lo, false, step); DrawRectangleRec({ a.x + 2, screenHeight - 49.0f, (float)UiMeasure(t.c_str(), 11) + 6, 15 }, Fade(Color{ 2, 8, 16, 255 }, 0.6f)); UiText(t.c_str(), (int)a.x + 5, (int)screenHeight - 47, 11, textC); }
+        }
+        for (double la = std::ceil(latLo / step) * step; la <= latHi; la += step) {
+            const Vector2 a = latLonToScreen(la, 0);
+            DrawLineV({ 0, a.y }, { screenWidth, a.y }, gridC);
+            { const std::string t = fmtDeg(la, true, step); DrawRectangleRec({ 3, a.y - 15.0f, (float)UiMeasure(t.c_str(), 11) + 6, 15 }, Fade(Color{ 2, 8, 16, 255 }, 0.6f)); UiText(t.c_str(), 6, (int)a.y - 13, 11, textC); }
+        }
+        // UTM zones (6 degrees wide) and latitude bands (8 degrees tall, letters C to X), while they are wide enough to read.
+        if (mapWidthPx / 360.0 * 6.0 >= 70.0) {
+            const Color zoneC = Fade(Color{ 255, 220, 120, 255 }, 0.45f);
+            for (int z = 0; z <= 60; ++z) {
+                const double lo = -180.0 + z * 6.0;
+                if (lo < lo0 - 6.0 || lo > lo1 + 6.0) continue;
+                const Vector2 a = latLonToScreen(0, lo);
+                DrawLineEx({ a.x, 0 }, { a.x, screenHeight }, 1.6f, zoneC);
+                const Vector2 m = latLonToScreen(0, lo + 3.0);
+                if (z < 60 && m.x > 20 && m.x < screenWidth - 20) UiText(TextFormat("%d", z + 1), (int)m.x - 6, (int)toolbarHeight + 40, 12, Fade(Color{ 255, 220, 120, 255 }, 0.9f));
+            }
+            for (int b = 0; b <= 20; ++b) {
+                const double la = b == 20 ? 84.0 : -80.0 + b * 8.0;
+                if (la < latLo - 8.0 || la > latHi + 8.0) continue;
+                const Vector2 a = latLonToScreen(la, 0);
+                DrawLineEx({ 0, a.y }, { screenWidth, a.y }, 1.6f, zoneC);
+                if (b < 20) { const Vector2 m = latLonToScreen(la + 4.0, 0); if (m.y > toolbarHeight + 60 && m.y < screenHeight - 60) UiText(TextFormat("%c", "CDEFGHJKLMNPQRSTUVWX"[b]), (int)screenWidth - 330, (int)m.y - 6, 12, Fade(Color{ 255, 220, 120, 255 }, 0.9f)); }
+            }
+        }
+        // scale bar
+        {
+            double cLa, cLo;
+            screenToLatLon(screenWidth * 0.5, screenHeight * 0.5, cLa, cLo);
+            const double u = kUnitKm[std::clamp(opts.units, 0, 2)], mPerPx = 40075016.686 * std::cos(cLa * DEG) / mapWidthPx;
+            const double target = 150.0 * mPerPx / (1000.0 * u);
+            double nice = 1.0;
+            for (double base = 1e-4; base < 1e7; base *= 10.0) for (double m : { 1.0, 2.0, 5.0 }) if (base * m <= target) nice = base * m;
+            const float len = (float)(nice * 1000.0 * u / mPerPx), x0 = screenWidth * 0.5f + 330.0f, y0 = screenHeight - 40.0f;
+            DrawRectangleRec({ x0 - 6, y0 - 18, len + 12, 34 }, Fade(Color{ 2, 8, 16, 255 }, 0.55f));
+            for (int i = 0; i < 4; ++i) DrawRectangleRec({ x0 + len * i / 4.0f, y0 - 2, len / 4.0f, 5 }, (i & 1) ? Fade(WHITE, 0.15f) : Fade(WHITE, 0.9f));
+            DrawRectangleLinesEx({ x0, y0 - 2, len, 5 }, 1.0f, WHITE);
+            UiText(TextFormat("%g %s", nice, kUnitName[std::clamp(opts.units, 0, 2)]), (int)x0, (int)y0 - 16, 11, WHITE);
+        }
+    };
+    auto tacticalAirSymbol = [&](Vector2 p, float r, bool mil, bool ground, bool sel) {
+        const Color col = ground ? Color{ 150, 160, 170, 255 } : mil ? tacMil : Fade(tacCiv, 0.78f);
+        if (ground) {
+            DrawRectangleV({ p.x - r * 0.5f, p.y - r * 0.5f }, { r, r }, Fade(col, 0.5f));
+            DrawRectangleLinesEx({ p.x - r * 0.5f, p.y - r * 0.5f, r, r }, 1.0f, col);
+        } else {
+            DrawCircleSector(p, r, 180.0f, 360.0f, 14, Fade(col, mil ? 0.45f : 0.22f));  // the dome of an air-track frame
+            DrawCircleSectorLines(p, r, 180.0f, 360.0f, 14, col);
+            if (mil) DrawCircleSectorLines(p, r + 3.0f, 180.0f, 360.0f, 14, col);
+            DrawCircleV(p, 1.6f, col);
+        }
+        if (sel) DrawRectangleLinesEx({ p.x - r - 6, p.y - r - 6, 2 * r + 12, 2 * r + 12 }, 1.0f, WHITE);
+    };
+    auto tacticalShipSymbol = [&](Vector2 p, float r, bool mil, bool sel) {
+        const Color col = mil ? tacMil : Fade(tacCiv, 0.78f);
+        DrawCircleV(p, r, Fade(col, mil ? 0.4f : 0.22f));
+        DrawCircleLines((int)p.x, (int)p.y, r, col);
+        if (mil) DrawCircleLines((int)p.x, (int)p.y, r + 3.0f, col);
+        if (sel) DrawRectangleLinesEx({ p.x - r - 6, p.y - r - 6, 2 * r + 12, 2 * r + 12 }, 1.0f, WHITE);
+    };
+    // Velocity leader: where the track will be in `seconds` if it holds course and speed.
+    auto tacticalLeader = [&](Vector2 p, double headingDeg, double speedMs, double seconds, double lat, float r, Color col) {
+        const double mPerPx = 40075016.686 * std::cos(lat * DEG) / mapWidthPx;
+        const float len = (float)(speedMs * seconds / std::max(1e-6, mPerPx));
+        if (len < r + 4.0f) return;
+        const float sx = (float)std::sin(headingDeg * DEG), sy = (float)-std::cos(headingDeg * DEG);
+        DrawLineEx({ p.x + sx * r, p.y + sy * r }, { p.x + sx * len, p.y + sy * len }, 1.4f, Fade(col, 0.9f));
+    };
+    auto tacticalBlock = [&](Vector2 p, float r, const std::string& l1, const std::string& l2, Color col, bool bright) {
+        const int fs = 11;
+        const int w = std::max(UiMeasure(l1.c_str(), fs), UiMeasure(l2.c_str(), fs)) + 8;
+        const float x = p.x + r + 10.0f, y = p.y - 24.0f;
+        DrawLine((int)(p.x + r * 0.7f), (int)(p.y - r * 0.7f), (int)x, (int)y + 13, Fade(col, 0.5f));
+        DrawRectangleRec({ x, y, (float)w, 26.0f }, Fade(Color{ 2, 10, 6, 255 }, 0.72f));
+        DrawRectangleLinesEx({ x, y, (float)w, 26.0f }, 1.0f, Fade(col, bright ? 0.9f : 0.45f));
+        UiText(l1.c_str(), (int)x + 4, (int)y + 2, fs, col);
+        UiText(l2.c_str(), (int)x + 4, (int)y + 13, fs, Color{ 170, 200, 185, 255 });
+    };
+    auto tacticalTrackLine = [&](double lat, double lon) {  // bearing and range from the reference point to the selected track
+        double rLat, rLon;
+        tacRef(rLat, rLon);
+        const double dist = greatCircleKm(rLat, rLon, lat, lon), brg = bearingDeg(rLat, rLon, lat, lon);
+        Vector2 prev = latLonToScreen(rLat, rLon), mid = prev;
+        for (int i = 1; i <= 40; ++i) {
+            const Vector2 cur = destPoint(rLat, rLon, brg, dist * i / 40.0);
+            if ((i & 1) && std::fabs(cur.x - prev.x) < screenWidth * 0.5f) DrawLineEx(prev, cur, 1.4f, Fade(WHITE, 0.75f));
+            prev = cur;
+            if (i == 20) mid = cur;
+        }
+        const std::string t = TextFormat("BRG %03.0f   RNG %.0f %s", brg, dist / kUnitKm[std::clamp(opts.units, 0, 2)], kUnitName[std::clamp(opts.units, 0, 2)]);
+        const int w = UiMeasure(t.c_str(), 11) + 8;
+        DrawRectangleRec({ mid.x - w * 0.5f, mid.y - 8.0f, (float)w, 16.0f }, Fade(BLACK, 0.7f));
+        UiText(t.c_str(), (int)(mid.x - w * 0.5f) + 4, (int)mid.y - 6, 11, WHITE);
+    };
+    auto tacticalPrediction = [&](double lat, double lon, double headingDeg, double speedMs) {  // where the track will be in 1, 5 and 10 minutes
+        for (int m : { 1, 5, 10 }) {
+            const Vector2 q = destPoint(lat, lon, headingDeg, speedMs * m * 60.0 / 1000.0);
+            DrawCircleLines((int)q.x, (int)q.y, 3.0f, WHITE);
+            UiText(TextFormat("%d", m), (int)q.x + 5, (int)q.y - 5, 10, WHITE);
+        }
+    };
+
     auto drawMapScene = [&]() {
 
         const Vector3 sunE{ (float)sunDirectionEarthFixed.x, (float)sunDirectionEarthFixed.y, (float)sunDirectionEarthFixed.z };
@@ -1989,7 +2173,11 @@ int main(int argc, char** argv) {
         DrawRectangleGradientH(0, 0, 90, (int)screenHeight, Fade(BLACK, 0.35f), BLANK);
         DrawRectangleGradientH((int)screenWidth - 90, 0, 90, (int)screenHeight, BLANK, Fade(BLACK, 0.35f));
 
-        {
+        if (opts.tactical) {
+            DrawRectangle(0, 0, (int)screenWidth, (int)screenHeight, Fade(Color{ 8, 16, 30, 255 }, 0.40f));  // mute the map a little so the symbols stand out
+            drawTacticalGrid();
+        }
+        if (!opts.tactical) {
             const float ga = opts.baseMap == 0 ? 1.0f : Clamp(1.0f - (float)((zoomF - 2.0) / 4.0), 0.0f, 1.0f);
             static const double steps[] = { 60, 30, 15, 10, 5, 2, 1, 0.5, 0.2, 0.1, 0.05, 0.02, 0.01 };
             double step = 60;
@@ -2167,6 +2355,8 @@ int main(int argc, char** argv) {
         if (adsb.enabled() || replayOn) {
             const float sz = (float)Clamp(4.8 + std::log2(std::max(1.0, zoomF)) * 0.45, 4.8, 10.5) * opts.markerScale;
             const bool trails = opts.acTrails && zoomF > 6.0;
+            int tacVisible = 0;  // tactical view: how crowded the screen is decides whether every track gets a data block
+            if (opts.tactical) for (size_t i = 0; i < aircraftList.size(); ++i) { const Vector2 q = aircraftScreen[i]; if (q.x > 0 && q.x < screenWidth && q.y > 0 && q.y < screenHeight && passesAircraftFilter(aircraftList[i])) ++tacVisible; }
             for (size_t i = 0; i < aircraftList.size(); ++i) {
                 const Aircraft& a = aircraftList[i];
                 if (!passesAircraftFilter(a)) continue;
@@ -2188,10 +2378,22 @@ int main(int argc, char** argv) {
                 float typeScale = 1.0f;
                 const Icon aircraftGlyph = aircraftIcon(a.type, &typeScale, a.gs);
                 const float glyph = s * 3.0f * typeScale * (a.ground ? 0.75f : 1.0f);
-                icons.drawOutlined(aircraftGlyph, p, glyph, (float)a.track, a.ground ? Fade(c, 0.8f) : c);
-                if (a.mil) DrawCircleLines((int)p.x, (int)p.y, glyph * 0.62f + 2.0f, Fade(Color{ 255, 120, 50, 255 }, 0.9f));
+                if (opts.tactical) {
+                    const float tr = (float)Clamp(4.5 + std::log2(std::max(1.0, zoomF)) * 0.5, 5.0, 10.0) * opts.markerScale * (a.mil ? 1.3f : 0.8f);
+                    const double aLat = aircraftLatLon[i].first, aLon = aircraftLatLon[i].second;
+                    const Color tc = a.mil ? tacMil : tacCiv;
+                    if (tacVisible > 350 && !a.mil && !sel && !hov) { DrawCircleV(p, 2.2f, Fade(tacCiv, 0.6f)); continue; }  // crowded: civilians thin out to dots so the map stays readable
+                    tacticalAirSymbol(p, tr, a.mil, a.ground, sel);
+                    if (!a.ground) tacticalLeader(p, a.track, a.gs * 0.514444, 120.0, aLat, tr, tc);
+                    if (sel) { tacticalTrackLine(aLat, aLon); if (!a.ground) tacticalPrediction(aLat, aLon, a.track, a.gs * 0.514444); }
+                    if (sel || hov || a.mil || ((zoomF > 32.0 || tacVisible < 70) && labelFree(p.x, p.y)))
+                        tacticalBlock(p, tr, a.call.empty() ? a.hex : a.call, a.ground ? std::string("GND") : std::string(TextFormat("FL%03.0f  %.0fK  %03.0f", a.altFt / 100.0, a.gs, a.track)), tc, sel || hov);
+                } else {
+                    icons.drawOutlined(aircraftGlyph, p, glyph, (float)a.track, a.ground ? Fade(c, 0.8f) : c);
+                    if (a.mil) DrawCircleLines((int)p.x, (int)p.y, glyph * 0.62f + 2.0f, Fade(Color{ 255, 120, 50, 255 }, 0.9f));
+                }
                 if (sel) DrawCircleLines((int)p.x, (int)p.y, s + 6, WHITE);
-                if ((showLabels && zoomF > 14.0 && !a.call.empty() && labelFree(p.x, p.y)) || sel || hov)
+                if (!opts.tactical && ((showLabels && zoomF > 14.0 && !a.call.empty() && labelFree(p.x, p.y)) || sel || hov))
                     UiText(a.call.empty() ? a.hex.c_str() : a.call.c_str(), (int)p.x + (int)s + 5, (int)p.y - 6, 12, sel || hov ? WHITE : Fade(c, 0.95f));
             }
         }
@@ -2249,10 +2451,21 @@ int main(int argc, char** argv) {
                 if (sel || hov) s *= 1.25f;
                 const bool moving = v.sog >= 0.5;
                 const float hd = (float)((v.heading < 360 ? v.heading : v.cog));
-                icons.drawOutlined(shipIcon(cat, v.shipType), p, s * 2.7f, hd, moving ? c : Fade(c, 0.7f));
-                if (ais::isMilitaryVessel(v)) DrawCircleLines((int)p.x, (int)p.y, s * 1.5f + 2.0f, Fade(Color{ 255, 120, 50, 255 }, 0.9f));
+                if (opts.tactical) {
+                    const bool shipMil = ais::isMilitaryVessel(v);
+                    const float tr = (float)Clamp(4.5 + std::log2(std::max(1.0, zoomF)) * 0.4, 5.0, 9.0) * opts.markerScale * (shipMil ? 1.3f : 0.8f);
+                    const Color tc = shipMil ? tacMil : tacCiv;
+                    tacticalShipSymbol(p, tr, shipMil, sel);
+                    if (moving) tacticalLeader(p, hd, v.sog * 0.514444, 600.0, shipLatLon[i].first, tr, tc);
+                    if (sel) tacticalTrackLine(shipLatLon[i].first, shipLatLon[i].second);
+                    if (sel || hov || shipMil || (zoomF > 30.0 && labelFree(p.x, p.y)))
+                        tacticalBlock(p, tr, v.name.empty() ? std::string(TextFormat("MMSI %d", v.mmsi)) : v.name, std::string(TextFormat("%.1fK  %03.0f", v.sog, hd)), tc, sel || hov);
+                } else {
+                    icons.drawOutlined(shipIcon(cat, v.shipType), p, s * 2.7f, hd, moving ? c : Fade(c, 0.7f));
+                    if (ais::isMilitaryVessel(v)) DrawCircleLines((int)p.x, (int)p.y, s * 1.5f + 2.0f, Fade(Color{ 255, 120, 50, 255 }, 0.9f));
+                }
                 if (sel) DrawCircleLines((int)p.x, (int)p.y, s + 7, WHITE);
-                if ((showLabels && zoomF > 22.0 && !v.name.empty() && labelFree(p.x, p.y)) || sel || hov)
+                if (!opts.tactical && ((showLabels && zoomF > 22.0 && !v.name.empty() && labelFree(p.x, p.y)) || sel || hov))
                     UiText(v.name.empty() ? TextFormat("MMSI %d", v.mmsi) : v.name.c_str(), (int)p.x + (int)s + 6, (int)p.y - 6, 12, sel || hov ? WHITE : Fade(c, 0.95f));
             }
         }
@@ -3091,6 +3304,7 @@ int main(int argc, char** argv) {
             if (addLeftToolbarButton("Aircraft", adsb.enabled(), "Live ADS-B aircraft  (A)")) adsb.setEnabled(!adsb.enabled());
             if (addLeftToolbarButton("Ships", shipsOn, "Live AIS vessels  (B)")) toggleShips();
             if (addLeftToolbarButton("Radar", opts.radarOn, "Rain radar  (D)")) toggleRadar();
+            if (addLeftToolbarButton("Tactical", opts.tactical, "Tactical map: graticule, UTM zones, NATO-style track symbols, military contact list  (')")) setTactical(!opts.tactical);
             {
                 static const char* milLabel[] = { "All traffic", "Civilian", "Military" };
                 if (addLeftToolbarButton(milLabel[opts.milFilter], opts.milFilter != 0, "Aircraft and ships: all, civilian only or military only  ([)")) opts.milFilter = (opts.milFilter + 1) % 3;
@@ -3175,7 +3389,7 @@ int main(int argc, char** argv) {
         if (layersOpen) {
             const bool wide = mode == Mode::Globe || mode == Mode::Sky;
             const float pw = wide ? 592.0f : 292.0f, lx = std::min(layersX, screenWidth - pw - 8.0f), py = toolbarHeight + 6.0f;
-            const float ph = mode == Mode::Map ? 540.0f : wide ? 500.0f : mode == Mode::Solar ? 180.0f : 70.0f;
+            const float ph = mode == Mode::Map ? 566.0f : wide ? 500.0f : mode == Mode::Solar ? 180.0f : 70.0f;
             uiShadowBox({ lx, py, pw, ph }, 0.92f);
             ui.region({ lx, py, pw, ph });
             float y = py + 10.0f;
@@ -3196,6 +3410,7 @@ int main(int argc, char** argv) {
                 ui.toggle(tx, y, tw, "Labels   [L]", showLabels); y += 24;
                 ui.toggle(tx, y, tw, "Ground track   [G]", showTrack); y += 24;
                 ui.toggle(tx, y, tw, "City names   [I]", opts.showCities); y += 24;
+                { bool tv = opts.tactical; if (ui.toggle(tx, y, tw, "Tactical view   [']", tv, "Tactical map: graticule, UTM zones, scale bar, track symbols with velocity leaders, military contacts")) setTactical(tv); y += 24; }
                 ui.toggle(tx, y, tw, "Trails behind aircraft and ships", opts.acTrails); y += 28;
                 drawPopupSectionTitle(lx, y, "HAZARDS, SPACE WEATHER, LAUNCHES");
                 { bool v = quakesOn; if (ui.toggle(tx, y, tw, "Earthquakes  (USGS, M2.5+)   [F3]", v)) { quakesOn = v; hazards.setQuakes(v); } y += 24; }
@@ -3438,7 +3653,7 @@ int main(int argc, char** argv) {
                                 { "Wheel", "zoom (to the cursor on the map)" }, { "Click", "select an object" }, { "Right-click", "place your ground station" }, { "/", "search (satellites, planets, stars)" },
                                 { "V  F9", "spacecraft missions / eclipses" }, { "\\", "favourite the selected satellite" },
                                 { "F", "follow / centre on the selection" }, { "H", "home: station on map, Sun in galaxy" }, { "R", "reset the view" }, { "Esc", "close panels, release, deselect, quit" } };
-            const KV col2[] = { { "TIME", "" }, { "Space", "pause" }, { ", .  T  1  N", "slower / faster, reverse, real time, now" }, { "LAYERS", "" }, { "A", "live aircraft (ADS-B)" }, { "B", "ships (AIS)" }, { "[", "all / civilian / military traffic" },
+            const KV col2[] = { { "TIME", "" }, { "Space", "pause" }, { ", .  T  1  N", "slower / faster, reverse, real time, now" }, { "LAYERS", "" }, { "A", "live aircraft (ADS-B)" }, { "B", "ships (AIS)" }, { "[", "all / civilian / military traffic" }, { "'", "tactical view on the map" }, { "Shift", "hold: measure range and bearing (tactical)" },
                                 { "D  K  Z  X", "rain radar / clouds / wind / weather at centre" }, { "Y", "cycle base map" }, { "L  O  C  G", "labels / orbits / constellations / ground track" },
                                 { "F3 - F7", "quakes, fires, aurora, launches, decay" }, { "F8", "pass alerts on / off" }, { "U", "cycle units" }, { "J", "jump to a date and time" }, { "Q", "constellation lines" }, { "I", "city names" }, { "F10  F11", "presets / ambient tour" }, { "F1  F2  F12", "help / settings / screenshot" } };
             auto column = [&](const KV* rows, int n, float x0) {
@@ -4047,6 +4262,82 @@ int main(int argc, char** argv) {
 
     };
 
+    // Tactical header strip and a list of the nearest military contacts (click one to select it).
+    auto drawTacticalPanel = [&]() {
+        if (mode != Mode::Map || !opts.tactical) return;
+        double rLat, rLon;
+        const bool haveStation = tacRef(rLat, rLon);
+        const int ui2 = std::clamp(opts.units, 0, 2);
+        int air = 0, airMil = 0, sfc = 0, sfcMil = 0;
+        struct Contact { double rangeKm, brg; bool ship; int index; };
+        std::vector<Contact> mil;
+        if (adsb.enabled()) for (size_t i = 0; i < aircraftList.size(); ++i) {
+            const Aircraft& a = aircraftList[i];
+            if (!passesAircraftFilter(a)) continue;
+            ++air;
+            if (a.mil) { ++airMil; mil.push_back({ greatCircleKm(rLat, rLon, aircraftLatLon[i].first, aircraftLatLon[i].second), bearingDeg(rLat, rLon, aircraftLatLon[i].first, aircraftLatLon[i].second), false, (int)i }); }
+        }
+        if (shipsOn) for (size_t i = 0; i < ships.size(); ++i) {
+            const Vessel& v = ships[i];
+            if (!passesShipFilter(v)) continue;
+            ++sfc;
+            if (ais::isMilitaryVessel(v)) { ++sfcMil; mil.push_back({ greatCircleKm(rLat, rLon, shipLatLon[i].first, shipLatLon[i].second), bearingDeg(rLat, rLon, shipLatLon[i].first, shipLatLon[i].second), true, (int)i }); }
+        }
+        const std::string head = TextFormat("TACTICAL    REF %s    AIR %d (%d mil)    SFC %d (%d mil)", haveStation ? "GND STN" : "MAP CENTRE", air, airMil, sfc, sfcMil);
+        const int hw = UiMeasure(head.c_str(), 13) + 28;
+        const Rectangle hr{ (screenWidth - hw) * 0.5f, toolbarHeight + 8.0f, (float)hw, 24.0f };
+        uiShadowBox(hr, 0.85f);
+        ui.region(hr);
+        DrawRectangleLinesEx(hr, 1.0f, Fade(tacGreen, 0.5f));
+        UiText(head.c_str(), (int)hr.x + 14, (int)hr.y + 5, 13, tacGreen);
+        {
+            const Vector2 mp = GetMousePosition();
+            if (!ui.overUi && mp.y > toolbarHeight) {
+                double cl, co;
+                screenToLatLon(mp.x, mp.y, cl, co);
+                int zone; char band; double ue, un;
+                toUtm(cl, co, zone, band, ue, un);
+                const std::string cur = std::string("CURSOR  ") + fmtDeg(cl, true, 1.0 / 3600.0) + "  " + fmtDeg(co, false, 1.0 / 3600.0) + TextFormat("     UTM %d%c  %.0fE  %.0fN", zone, band, ue, un);
+                const int cw = UiMeasure(cur.c_str(), 11) + 20;
+                DrawRectangleRec({ (screenWidth - cw) * 0.5f, hr.y + 28.0f, (float)cw, 18.0f }, Fade(Color{ 2, 8, 16, 255 }, 0.65f));
+                UiText(cur.c_str(), (int)((screenWidth - cw) * 0.5f) + 10, (int)hr.y + 31, 11, Color{ 190, 225, 255, 255 });
+                if (IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT)) {  // hold Shift: range and bearing from the reference point to the cursor
+                    tacticalTrackLine(cl, co);
+                    DrawCircleLines((int)mp.x, (int)mp.y, 5.0f, WHITE);
+                }
+            }
+        }
+
+        std::sort(mil.begin(), mil.end(), [](const Contact& a, const Contact& b) { return a.rangeKm < b.rangeKm; });
+        const int rows = (int)std::min<size_t>(mil.size(), 8);
+        const float pw = 300.0f, px0 = 12.0f, py0 = (float)readoutBottomY + 6.0f, ph = 58.0f + std::max(1, rows) * 22.0f + 6.0f;
+        uiShadowBox({ px0, py0, pw, ph }, 0.85f);
+        ui.region({ px0, py0, pw, ph });
+        DrawRectangle((int)px0 + 1, (int)py0 + 1, 4, 52, Fade(tacMil, 0.9f));
+        UiText("Military contacts", (int)px0 + 14, (int)py0 + 8, 18, tacMil);
+        UiText(TextFormat("%zu tracked  -  nearest first  -  click to select", mil.size()), (int)px0 + 14, (int)py0 + 31, 11, mutedColor);
+        if (mil.empty()) UiText("none in view of the loaded feeds", (int)px0 + 14, (int)py0 + 58, 12, mutedColor);
+        for (int i = 0; i < rows; ++i) {
+            const Contact& c = mil[(size_t)i];
+            const float ry = py0 + 56.0f + i * 22.0f;
+            const Rectangle rr{ px0 + 6, ry, pw - 12, 21 };
+            if (ui.hover(rr)) DrawRectangleRounded(rr, 0.2f, 4, Fade(WHITE, 0.08f));
+            std::string name, info;
+            if (c.ship) { const Vessel& v = ships[(size_t)c.index]; name = v.name.empty() ? std::string(TextFormat("MMSI %d", v.mmsi)) : v.name; info = "SFC"; }
+            else { const Aircraft& a = aircraftList[(size_t)c.index]; name = a.call.empty() ? a.hex : a.call; info = a.type.empty() ? "AIR" : a.type; }
+            if (name.size() > 11) name = name.substr(0, 11);
+            UiText(name.c_str(), (int)px0 + 14, (int)ry + 4, 12, tacMil);
+            UiText(info.c_str(), (int)px0 + 106, (int)ry + 4, 12, textColor);
+            const std::string rb = TextFormat("%03.0f  %.0f %s", c.brg, c.rangeKm / kUnitKm[ui2], kUnitName[ui2]);
+            UiText(rb.c_str(), (int)(px0 + pw - 12 - UiMeasure(rb.c_str(), 12)), (int)ry + 4, 12, tacGreen);
+            if (ui.clicked(rr)) {
+                if (c.ship) { selectedShip = ships[(size_t)c.index].mmsi; selectedAc.clear(); }
+                else { selectedAc = aircraftList[(size_t)c.index].hex; selectedShip = 0; }
+            }
+        }
+        readoutBottomY += (int)ph + 8;
+    };
+
     auto drawWeatherCard = [&]() {
         if (mode == Mode::Map && wxProbe) {
             const WeatherPoint w = wx.center();
@@ -4249,6 +4540,7 @@ int main(int argc, char** argv) {
         drawStatusBarAndHints();
         drawInfoPanels();
         drawWeatherCard();
+        drawTacticalPanel();
         drawLiveCards();
         drawSkyPassPlanner();
         drawTimeDialog();
