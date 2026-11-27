@@ -3,6 +3,7 @@
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
+#include <fstream>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -26,21 +27,28 @@ public:
 private:
     struct Source { const char* fileName; const char* group; std::uintmax_t minimumBytes; };
 
-    static bool isFresh(const std::string& path) {
+    static bool isYoungerThan(const std::string& path, std::chrono::hours limit) {
         namespace fs = std::filesystem;
         std::error_code ignored;
         if (!fs::exists(path, ignored)) return false;
-        const auto age = fs::file_time_type::clock::now() - fs::last_write_time(path, ignored);
-        return age < std::chrono::hours(12);
+        return fs::file_time_type::clock::now() - fs::last_write_time(path, ignored) < limit;
+    }
+
+    static void recordAttempt(const std::string& path) {
+        std::ofstream(path + ".attempt") << "attempted\n";
     }
 
     void refreshStaleFiles() {
         namespace fs = std::filesystem;
+        std::error_code ignoredError;
+        fs::create_directories(directory_, ignoredError);
         const Source sources[] = { { "stations.txt", "stations", 300 }, { "active.txt", "active", 100000 } };
         bool updated = false;
         for (const Source& source : sources) {
             const std::string path = directory_ + source.fileName;
-            if (isFresh(path)) continue;
+            if (isYoungerThan(path, std::chrono::hours(12))) continue;
+            if (isYoungerThan(path + ".attempt", std::chrono::hours(3))) continue;
+            recordAttempt(path);
             const std::string url = std::string("https://celestrak.org/NORAD/elements/gp.php?GROUP=") + source.group + "&FORMAT=tle";
             const std::string download = path + ".new";
             std::error_code ignored;

@@ -186,12 +186,17 @@ inline std::vector<Entity> loadSatelliteCatalog(const Body& earth) {
     std::vector<Entity> entities;
     entities.reserve(20000);
     std::unordered_set<int> seenNoradIds;
-    for (const std::string& directory : { paths::dataPath("tle/"), paths::assetPath("assets/tle/") }) {
-        const int loaded = loadTleFile(directory + "stations.txt", seenNoradIds, entities, true) + loadTleFile(directory + "active.txt", seenNoradIds, entities, false);
-        if (loaded) {
-            TraceLog(LOG_INFO, "Loaded %d TLEs from %s", loaded, directory.c_str());
-            break;
+    struct TleFile { const char* name; bool isStationGroup; };
+    for (const TleFile& file : { TleFile{ "stations.txt", true }, TleFile{ "active.txt", false } }) {
+        const std::string refreshedPath = paths::dataPath("tle/") + file.name;
+        const std::string bundledPath = paths::assetPath(std::string("assets/tle/") + file.name);
+        int loaded = loadTleFile(refreshedPath, seenNoradIds, entities, file.isStationGroup);
+        std::string source = refreshedPath;
+        if (loaded == 0) {
+            loaded = loadTleFile(bundledPath, seenNoradIds, entities, file.isStationGroup);
+            source = bundledPath;
         }
+        TraceLog(LOG_INFO, "Loaded %d TLEs from %s", loaded, source.c_str());
     }
     if (entities.empty()) {
         TraceLog(LOG_WARNING, "No TLE data found, using built-in demo scene");
