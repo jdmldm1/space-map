@@ -30,6 +30,7 @@
 #include "history.hpp"
 #include "icons.hpp"
 #include "launches.hpp"
+#include "lookup.hpp"
 #include "icon_png.hpp"
 #include "meta.hpp"
 #include "missions.hpp"
@@ -179,6 +180,8 @@ int main(int argc, char** argv) {
     WeatherFeed wx(appDir);
     wx.start();
     HazardFeed hazards(appDir);
+    InfoLookup infoLookup(paths::dataPath("info/"));
+    std::map<std::string, Texture2D> infoTextures;
     hazards.start();
     LaunchFeed launchFeed(appDir + "launch_tmp.json");
     launchFeed.start();
@@ -946,7 +949,24 @@ int main(int argc, char** argv) {
                 J(147.0, "iss-model");
                 atT(148.0, [&]() {});
             }
-            if (scenario == "smoke") {
+            if (scenario == "info") {
+                atT(1.0, [&]() { opts.showHints = false; setMode(Mode::Globe); pick("ISS (ZARYA)", 1.5f); });
+                shotT(9.0, "info-iss");
+                atT(9.5, [&]() { pick("HST", 1.5f); });
+                shotT(17.0, "info-hst");
+                atT(17.5, [&]() { selected = -1; follow = false; for (size_t i = 0; i < entities.size(); ++i) if (entities[i].name.rfind("STARLINK-", 0) == 0) { selected = (int)i; break; } });
+                shotT(24.0, "info-starlink");
+                atT(24.5, [&]() { selected = -1; follow = false; setMode(Mode::Solar); selectMission(idx("europaclipper"), true); solarCam.goal = solarCam.dist = 6.0; });
+                shotT(32.0, "info-mission");
+                atT(32.5, [&]() { selMission = -1; setMode(Mode::Map); adsb.setEnabled(true); mapWidthPx = screenWidth * 70.0; mapCentreU = (-73.95 + 180.0) / 360.0; const double sn = std::sin(40.72 * DEG); mapCentreV = 0.5 - std::log((1 + sn) / (1 - sn)) / (4 * PI_D); });
+                atT(50.0, [&]() { for (const Aircraft& a : aircraftList) if (!a.call.empty() && !a.type.empty() && aircraftTypeName(a.type)[0]) { selectedAc = a.hex; break; } });
+                shotT(60.0, "info-aircraft");
+                atT(61.0, [&]() { selectedAc.clear(); adsb.setEnabled(false); shipsOn = true; ais.setEnabled(true); mapWidthPx = screenWidth * 60.0; mapCentreU = (24.94 + 180.0) / 360.0; const double sn = std::sin(60.12 * DEG); mapCentreV = 0.5 - std::log((1 + sn) / (1 - sn)) / (4 * PI_D); });
+                atT(85.0, [&]() { for (const Vessel& v : ships) if (v.name.size() >= 6 && v.imo && v.len > 150) { selectedShip = v.mmsi; break; } });
+                shotT(95.0, "info-ship");
+                atT(96.0, [&]() {});
+            }
+            if (scenario == "panels") {
                 // Quick visual check of the panels and views touched by recent merges.
                 atT(2.0, [&]() { opts.showHints = false; setMode(Mode::Globe); layersOpen = true; });
                 shotT(4.0, "layers-globe");
@@ -3484,12 +3504,101 @@ int main(int argc, char** argv) {
 
     };
 
+    // "Learn more" card shown beside the info panel: photo, article summary and links for the selected object.
+    struct InfoLink { std::string label, url; };
+    auto wrapPx = [&](const std::string& text, int fontSize, int maxPx, size_t maxLines) {
+        std::vector<std::string> lines;
+        std::string cur, word;
+        std::istringstream in(text);
+        bool cut = false;
+        while (in >> word) {
+            const std::string trial = cur.empty() ? word : cur + " " + word;
+            if (UiMeasure(trial.c_str(), fontSize) <= maxPx) { cur = trial; continue; }
+            lines.push_back(cur); cur = word;
+            if (lines.size() == maxLines) { cut = true; break; }
+        }
+        if (!cut && !cur.empty()) lines.push_back(cur);
+        if (lines.size() > maxLines) { lines.resize(maxLines); cut = true; }
+        if (cut && !lines.empty()) { std::string& l = lines.back(); while (!l.empty() && UiMeasure((l + "...").c_str(), fontSize) > maxPx) l.pop_back(); l += "..."; }
+        return lines;
+    };
+    auto infoTexture = [&](const std::string& file) -> const Texture2D* {
+        if (file.empty()) return nullptr;
+        auto it = infoTextures.find(file);
+        if (it != infoTextures.end()) return it->second.id ? &it->second : nullptr;
+        if (infoTextures.size() > 40) { for (auto& kv : infoTextures) if (kv.second.id) UnloadTexture(kv.second); infoTextures.clear(); }
+        Texture2D t{};
+        Image img = LoadImage(file.c_str());
+        if (img.data) {
+            if (img.width > 640) ImageResize(&img, 640, (int)(img.height * 640.0 / img.width));
+            t = LoadTextureFromImage(img);
+            if (t.id) SetTextureFilter(t, TEXTURE_FILTER_BILINEAR);
+            UnloadImage(img);
+        }
+        auto& slot = infoTextures[file];
+        slot = t;
+        return slot.id ? &slot : nullptr;
+    };
+    auto drawInfoCard = [&](const InfoRequest& req, const std::vector<InfoLink>& links, int x, int y, int w, const std::string& title) {
+        const InfoCard card = infoLookup.get(req);
+        const Texture2D* tex = card.ready ? infoTexture(card.imageFile) : nullptr;
+        std::vector<InfoLink> all;
+        if (!card.wikiUrl.empty()) all.push_back({ "Read more on Wikipedia", card.wikiUrl });
+        for (const InfoLink& l : links) all.push_back(l);
+        const int pad = 12, inner = w - 2 * pad;
+        const int imgH = tex ? std::min(190, (int)(inner * (double)tex->height / tex->width)) : 0;
+        const std::vector<std::string> body = card.summary.empty() ? std::vector<std::string>{} : wrapPx(card.summary, 13, inner, 9);
+        const int cols = 2, lead = card.wikiUrl.empty() ? 0 : 1, rows = lead + ((int)all.size() - lead + cols - 1) / cols;
+        int h = 34;
+        h += tex ? imgH + 20 : 22;
+        h += body.empty() ? 0 : (int)body.size() * 17 + 10;
+        h += rows * 30 + 8;
+        uiShadowBox({ (float)x, (float)y, (float)w, (float)h });
+        ui.region({ (float)x, (float)y, (float)w, (float)h });
+        UiText("LEARN MORE", x + pad, y + 10, 11, { 120, 130, 150, 255 });
+        DrawLine(x + pad + 84, y + 17, x + w - pad, y + 17, Fade(WHITE, 0.10f));
+        int yy = y + 30;
+        if (tex) {
+            const Rectangle dst{ (float)(x + pad), (float)yy, (float)inner, (float)imgH };
+            DrawRectangleRec(dst, { 232, 236, 244, 255 });  // backdrop for logos with transparency
+            DrawTexturePro(*tex, { 0, 0, (float)tex->width, (float)tex->height }, dst, { 0, 0 }, 0.0f, WHITE);
+            DrawRectangleLinesEx(dst, 1.0f, Fade(WHITE, 0.15f));
+            yy += imgH + 3;
+            UiText(card.credit.c_str(), x + pad, yy, 10, { 130, 140, 160, 255 });
+            yy += 17;
+        } else {
+            UiText(!card.ready ? "Looking up photo and details..." : card.found ? "No photo available" : "No photo or article found for this object", x + pad, yy, 12, mutedColor);
+            yy += 22;
+        }
+        if (!body.empty()) {
+            for (const std::string& l : body) { UiText(l.c_str(), x + pad, yy, 13, { 205, 212, 228, 255 }); yy += 17; }
+            yy += 10;
+        }
+        const int bw = (inner - 6) / cols;
+        for (size_t i = 0; i < all.size(); ++i) {
+            const bool wide = (int)i < lead;
+            const int j = (int)i - lead;
+            const int cx = wide ? x + pad : x + pad + (j % cols) * (bw + 6), cy = yy + (wide ? 0 : (lead + j / cols) * 30);
+            const Rectangle r{ (float)cx, (float)cy, wide ? (float)inner : (float)bw, 26.0f };
+            if (ui.button(r, all[i].label.c_str(), false, all[i].url.c_str())) OpenURL(all[i].url.c_str());
+        }
+        (void)title;
+        return h;
+    };
+
     auto drawInfoPanels = [&]() {
         const int px = (int)screenWidth - 300;
         const int py0 = (int)toolbarHeight + 10;
         const Color classCol[] = { { 215, 225, 240, 255 }, { 90, 255, 120, 255 }, { 200, 160, 255, 255 }, { 255, 240, 120, 255 } };
         const char* classNames[] = { "Low Earth orbit (LEO)", "Medium Earth orbit (MEO)", "Geostationary / geosynchronous", "Highly elliptical (HEO)" };
         hoverTitle.clear(); hoverDetail.clear();
+        InfoRequest cardReq;
+        std::vector<InfoLink> cardLinks;
+        bool cardOn = false;
+        int cardLeft = px;
+        auto stripParens = [](std::string t) { for (size_t a; (a = t.find('(')) != std::string::npos;) { const size_t b = t.find(')', a); t.erase(a, b == std::string::npos ? std::string::npos : b - a + 1); } while (!t.empty() && t.back() == ' ') t.pop_back(); return t; };
+        auto firstWord = [](const std::string& t) { return webinfo::lower(t.substr(0, t.find(' '))); };
+        const std::vector<std::string> spaceWords = { "satellite", "spacecraft", "space station", "telescope", "constellation", "orbit", "rocket", "probe", "crew" };
         {
             PanelData pd;
             bool have = false;
@@ -3502,6 +3611,12 @@ int main(int argc, char** argv) {
                 const double nowT = nowUnix();
                 const MStatus st = m.status(nowT);
                 pd.title = m.name; pd.tc = m.color; pd.sub = m.agency;
+                {
+                    const std::string nm = stripParens(m.name);
+                    cardOn = true;
+                    cardReq = { "mission:" + m.key, { nm, nm + " spacecraft" }, { webinfo::lower(nm), firstWord(nm) }, { "mission", "spacecraft", "probe", "rocket", "launch", "satellite", "lander", "rover", "telescope", "program", "flight" }, "" };
+                    cardLinks = { { "Search the web", "https://duckduckgo.com/?q=" + webinfo::urlEncode(nm + " " + m.agency + " mission") }, { "Wikimedia images", "https://commons.wikimedia.org/w/index.php?search=" + webinfo::urlEncode(nm) } };
+                }
                 addWide(m.kind, mutedColor);
                 addWide("Destination: " + m.target, mutedColor);
                 addSection("STATUS");
@@ -3556,7 +3671,9 @@ int main(int argc, char** argv) {
                     }
                 }
                 const int panelX = px - 32;
+                cardLeft = panelX;
                 const int ph = uiDrawPanel(pd, panelX, py0, 320);
+                if (cardOn) drawInfoCard(cardReq, cardLinks, panelX - 300, py0, 288, pd.title);
                 ui.region({ (float)panelX, (float)py0, 320.0f, (float)ph });
                 const float by = (float)(py0 + ph + 8);
                 int prevEv = -1, nextEv = -1;
@@ -3576,6 +3693,24 @@ int main(int argc, char** argv) {
                 const bool lit = sunlit(Vec3d{ rx2, ry2, rz2 }, sunDirection, earth.radiusKm);
                 pd.title = e.name; pd.tc = e.color;
                 pd.sub = std::string(kindName(e.kind)) + (e.group.empty() ? "" : "  ·  " + e.group);
+                {
+                    const std::string up = [&] { std::string u = e.name; for (char& ch : u) ch = (char)std::toupper((unsigned char)ch); return u; }();
+                    const bool junk = up.find(" DEB") != std::string::npos || up.find(" R/B") != std::string::npos || up.rfind("OBJECT ", 0) == 0 || up.find("TBA") != std::string::npos;
+                    const std::string clean = stripParens(e.name);
+                    cardOn = true;
+                    cardReq.key = "sat:" + (e.norad ? std::to_string(e.norad) : e.name);
+                    if (!junk) {
+                        if (!e.group.empty()) { cardReq.queries.push_back(e.group); cardReq.match.push_back(firstWord(e.group)); }
+                        cardReq.queries.push_back(clean); cardReq.match.push_back(firstWord(clean));
+                        if (e.name != clean) cardReq.queries.push_back(e.name);
+                        cardReq.keywords = spaceWords;
+                    }
+                    if (e.norad) {
+                        const std::string id = std::to_string(e.norad);
+                        cardLinks = { { "CelesTrak record", "https://celestrak.org/satcat/records.php?CATNR=" + id }, { "N2YO live track", "https://www.n2yo.com/satellite/?s=" + id },
+                                      { "Heavens-Above", "https://www.heavens-above.com/orbit.aspx?satid=" + id }, { "Wikimedia images", "https://commons.wikimedia.org/w/index.php?search=" + webinfo::urlEncode(clean) } };
+                    }
+                }
                 addSection("POSITION");
                 addRow("Altitude", fmtDistKm(opts, e.altKm));
                 addRow("Speed", opts.units == 1 ? std::string(TextFormat("%.2f mi/s", e.orbit.speedAt(r) * 0.621371)) : std::string(TextFormat("%.2f km/s", e.orbit.speedAt(r))));
@@ -3638,6 +3773,23 @@ int main(int argc, char** argv) {
                     pd.title = a.call.empty() ? a.hex : a.call;
                     pd.tc = a.hasAlt ? altColor(a.altFt) : WHITE;
                     pd.sub = airline[0] ? airline : (a.reg.empty() ? "Aircraft (ADS-B)" : "Aircraft  ·  " + a.reg);
+                    {
+                        std::string hexUp = a.hex; for (char& ch : hexUp) ch = (char)std::toupper((unsigned char)ch);
+                        cardOn = true;
+                        cardReq.key = "ac:" + a.hex + ":" + a.type;
+                        cardReq.photoHex = hexUp;
+                        if (!typeName.empty()) {
+                            const size_t sp = typeName.rfind(' ');
+                            std::string model = webinfo::lower(sp == std::string::npos ? typeName : typeName.substr(sp + 1));
+                            model = model.substr(0, model.find('-'));
+                            cardReq.queries = { typeName };
+                            cardReq.match = { model, firstWord(typeName) };
+                            cardReq.keywords = { "aircraft", "airliner", "jet", "helicopter", "airplane", "plane", "turboprop" };
+                        }
+                        if (!a.call.empty()) { cardLinks.push_back({ "FlightAware", "https://flightaware.com/live/flight/" + a.call }); cardLinks.push_back({ "Flightradar24", "https://www.flightradar24.com/" + a.call }); }
+                        cardLinks.push_back({ "ADS-B Exchange", "https://globe.adsbexchange.com/?icao=" + a.hex });
+                        cardLinks.push_back({ "Planespotters", "https://www.planespotters.net/hex/" + hexUp });
+                    }
                     addSection("AIRCRAFT");
                     addRow("Type", typeName.empty() ? (a.type.empty() ? "?" : a.type) : typeName + "  (" + a.type + ")");
                     if (!a.reg.empty()) addRow("Registration", a.reg);
@@ -3668,6 +3820,20 @@ int main(int argc, char** argv) {
                     pd.title = v.name.empty() ? std::string(TextFormat("MMSI %d", v.mmsi)) : v.name;
                     pd.tc = v.shipType == 0 ? Color{ 170, 176, 188, 255 } : cat == 0 ? Color{ 90, 214, 120, 255 } : cat == 1 ? Color{ 242, 92, 82, 255 } : cat == 2 ? Color{ 92, 172, 255, 255 } : cat == 3 ? Color{ 255, 172, 62, 255 } : Color{ 200, 172, 255, 255 };
                     pd.sub = std::string(v.shipType ? ais::shipTypeName(v.shipType) : "Vessel (AIS)") + (ais::mmsiCountry(v.mmsi)[0] ? std::string("  ·  ") + ais::mmsiCountry(v.mmsi) : "");
+                    {
+                        cardOn = true;
+                        cardReq.key = "ship:" + std::to_string(v.mmsi);
+                        if (v.name.size() >= 4) {
+                            cardReq.queries = { v.name + " ship", v.name };
+                            cardReq.match = { webinfo::lower(v.name) };
+                            cardReq.keywords = { "ship", "vessel", "ferry", "tanker", "cargo", "boat", "yacht", "icebreaker", "container", "cruise", "tug" };
+                        }
+                        cardLinks.push_back({ "MarineTraffic", "https://www.marinetraffic.com/en/ais/details/ships/mmsi:" + std::to_string(v.mmsi) });
+                        if (v.imo) {
+                            cardLinks.push_back({ "VesselFinder", "https://www.vesselfinder.com/vessels/details/" + std::to_string(v.imo) });
+                            cardLinks.push_back({ "ShipSpotting photos", "https://www.shipspotting.com/photos/gallery?imo=" + std::to_string(v.imo) });
+                        } else if (!v.name.empty()) cardLinks.push_back({ "Wikimedia images", "https://commons.wikimedia.org/w/index.php?search=" + webinfo::urlEncode(v.name) });
+                    }
                     addSection("VOYAGE");
                     addRow("Status", ais::navStatusName(v.navStat));
                     if (!v.dest.empty()) addRow("Destination", v.dest);
@@ -3736,6 +3902,7 @@ int main(int argc, char** argv) {
             }
             if (have) {
                 const int ph = uiDrawPanel(pd, px, py0, 288);
+                if (cardOn) drawInfoCard(cardReq, cardLinks, cardLeft - 300, py0, 288, pd.title);
                 if (satMode && selected >= 0 && cm < 0 && entities[selected].norad) {
                     const bool fav = favourites.count(entities[selected].norad) > 0;
                     if (ui.button({ (float)px, (float)(py0 + ph + 8), 288.0f, 26.0f }, fav ? "Remove from favourites   [\\]" : "Add to favourites   [\\]", fav, "Favourites are always labelled and get pass alerts", { 255, 205, 90, 255 })) toggleFavourite(selected);

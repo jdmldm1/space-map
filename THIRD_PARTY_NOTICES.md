@@ -39,6 +39,8 @@ the license of Space Map's own code; follow the upstream links for the exact ter
 | [NASA EONET](https://eonet.gsfc.nasa.gov) | Wildfires, volcanoes, storms and other natural events | NASA open data policy |
 | [NOAA Space Weather Prediction Center](https://www.swpc.noaa.gov) | Kp index, solar X-rays, aurora forecast | Public domain |
 | [Launch Library 2](https://thespacedevs.com/llapi) (The Space Devs) | Upcoming launches | Free tier is rate limited; attribution requested. Space Map polls every 20 minutes |
+| [Wikipedia](https://www.wikipedia.org) / Wikimedia Commons | "Learn more" article summaries and photos for the selected object | Text CC BY-SA 4.0; images carry their own licences (see the page linked from each card) |
+| [Planespotters.net](https://www.planespotters.net) | Aircraft photos in the "Learn more" card | Photographer credit and link shown on the card, as their API terms require |
 | JPL approximate planetary positions | Solar System | NASA/JPL, public data |
 
 Check each service's terms before commercial use or heavy automated use.
