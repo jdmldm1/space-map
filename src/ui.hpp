@@ -41,7 +41,7 @@ struct Options {
     int units = 0;
     bool localTime = false;
     float markerScale = 1.0f, starBright = 1.0f;
-    bool showClouds = true, showSpecular = true, showNightLights = true, showConst = true;
+    bool showClouds = true, showSpecular = true, showNightLights = true, showConst = true, showCities = true;
     bool satLEO = true, satMEO = true, satGEO = true, satHEO = true;
     bool acGround = true, acTrails = true; int acMinAlt = 0;
     bool shipCargo = true, shipTanker = true, shipPass = true, shipFish = true, shipOther = true, shipMoving = false;
@@ -68,7 +68,7 @@ struct Options {
         auto I = [&](const char* k, int& v) { if (kv.count(k)) v = std::atoi(kv[k].c_str()); };
         auto B = [&](const char* k, bool& v) { if (kv.count(k)) v = std::atoi(kv[k].c_str()) != 0; };
         auto F = [&](const char* k, float& v) { if (kv.count(k)) v = (float)std::atof(kv[k].c_str()); };
-        I("units", units); B("localTime", localTime); F("markerScale", markerScale); F("starBright", starBright); B("showClouds", showClouds); B("showNightLights", showNightLights); B("showConst", showConst); B("showSpecular", showSpecular);
+        I("units", units); B("localTime", localTime); F("markerScale", markerScale); F("starBright", starBright); B("showClouds", showClouds); B("showNightLights", showNightLights); B("showConst", showConst); B("showCities", showCities); B("showSpecular", showSpecular);
         B("satLEO", satLEO); B("satMEO", satMEO); B("satGEO", satGEO); B("satHEO", satHEO); B("acGround", acGround); B("acTrails", acTrails); I("acMinAlt", acMinAlt);
         B("shipCargo", shipCargo); B("shipTanker", shipTanker); B("shipPass", shipPass); B("shipFish", shipFish); B("shipOther", shipOther); B("shipMoving", shipMoving);
         I("baseMap", baseMap); F("radarOpacity", radarOpacity); B("showHints", showHints); B("vsync", vsync); B("showStatus", showStatus);
@@ -79,7 +79,7 @@ struct Options {
     void save() const {
         std::ofstream f(path());
         f << "# spacemap options (edited from the Settings panel). ais_nmea=host:port adds a raw NMEA AIS feed, e.g. a local receiver.\n";
-        f << "units=" << units << "\nlocalTime=" << localTime << "\nmarkerScale=" << markerScale << "\nstarBright=" << starBright << "\nshowClouds=" << showClouds << "\nshowNightLights=" << showNightLights << "\nshowConst=" << showConst
+        f << "units=" << units << "\nlocalTime=" << localTime << "\nmarkerScale=" << markerScale << "\nstarBright=" << starBright << "\nshowClouds=" << showClouds << "\nshowNightLights=" << showNightLights << "\nshowConst=" << showConst << "\nshowCities=" << showCities
           << "\nshowSpecular=" << showSpecular << "\nsatLEO=" << satLEO << "\nsatMEO=" << satMEO << "\nsatGEO=" << satGEO << "\nsatHEO=" << satHEO
           << "\nacGround=" << acGround << "\nacTrails=" << acTrails << "\nacMinAlt=" << acMinAlt << "\nshipCargo=" << shipCargo << "\nshipTanker=" << shipTanker
           << "\nshipPass=" << shipPass << "\nshipFish=" << shipFish << "\nshipOther=" << shipOther << "\nshipMoving=" << shipMoving << "\nbaseMap=" << baseMap

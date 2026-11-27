@@ -17,6 +17,7 @@
 
 #include "adsb.hpp"
 #include "catalog.hpp"
+#include "cities.hpp"
 #include "earthhd.hpp"
 #include "formatting.hpp"
 #include "galaxy.hpp"
@@ -114,6 +115,7 @@ int main(int argc, char** argv) {
 
     const std::vector<StarRec> catalog = loadStars(paths::assetPath("assets/stars.csv"));
     TraceLog(LOG_INFO, "Star catalogue: %zu stars", catalog.size());
+    const std::vector<City> cities = loadCities(paths::assetPath("assets/cities.csv"));
     const StarSky starSky = buildStarSky(catalog);
     const std::vector<SkyStar>& sky = starSky.stars;
     const std::vector<std::pair<Vector3, Color>>& band = starSky.milkyWayBand;
@@ -402,6 +404,38 @@ int main(int argc, char** argv) {
         y += 19;
     };
 
+    float viewFade = 0.0f;
+    auto faceGlobeTowards = [&](double latitudeDeg, double longitudeDeg) {
+        const double lat = latitudeDeg * DEG, inertialLongitude = longitudeDeg * DEG + earthRotationAngle;
+        const double x = std::cos(lat) * std::cos(inertialLongitude), y = std::cos(lat) * std::sin(inertialLongitude), z = std::sin(lat);
+        pitch = (float)std::asin(z);
+        yaw = (float)std::atan2(x, -y);
+        yawV = pitchV = 0.0f;
+    };
+    auto switchGlobeToMap = [&]() {
+        const Vector3 direction{ std::cos(pitch) * std::sin(yaw), std::sin(pitch), std::cos(pitch) * std::cos(yaw) };
+        const double latitude = std::asin(direction.y) / DEG;
+        double longitude = (std::atan2(-direction.z, direction.x) - earthRotationAngle) / DEG;
+        longitude = std::fmod(std::fmod(longitude + 180.0, 360.0) + 360.0, 360.0) - 180.0;
+        const double altitudeKm = std::max(0.05, (double)dist - earthR) * 1000.0;
+        const double visibleWidthKm = 2.0 * altitudeKm * std::tan(22.5 * DEG) * screenWidth / screenHeight;
+        const double spanDegrees = visibleWidthKm / (111.32 * std::max(0.1, std::cos(latitude * DEG)));
+        setMode(Mode::Map);
+        mapCentreU = (longitude + 180.0) / 360.0;
+        mapCentreV = mercatorWorldY(latitude);
+        mapWidthPx = std::min(std::max(screenWidth * 360.0 / std::max(spanDegrees, 0.01), (double)screenWidth), 256.0 * std::pow(2.0, 19));
+        viewFade = 0.85f;
+    };
+    auto switchMapToGlobe = [&]() {
+        double latitude, longitude;
+        screenToLatLon(screenWidth * 0.5, screenHeight * 0.5, latitude, longitude);
+        faceGlobeTowards(latitude, longitude);
+        setMode(Mode::Globe);
+        dist = earthR + 0.6f;
+        distGoal = 14.0f;
+        viewFade = 0.85f;
+    };
+
     auto beginFrame = [&]() {
         frameSeconds = std::min(GetFrameTime(), 0.1f);
         ++frame;
@@ -497,7 +531,18 @@ int main(int argc, char** argv) {
             if (scriptStep == 7 && tnow - scriptT > 0.9) { pendingShot = shotPrefix + "layers.png"; scriptStep = 8; scriptT = tnow; }
             if (scriptStep == 8 && tnow - scriptT > 0.2) { layersOpen = false; helpOpen = true; scriptStep = 9; scriptT = tnow; }
             if (scriptStep == 9 && tnow - scriptT > 0.9) { pendingShot = shotPrefix + "help.png"; scriptStep = 10; scriptT = tnow; }
-            if (scriptStep == 10 && tnow - scriptT > 0.6) return true;
+            if (scriptStep == 10 && tnow - scriptT > 0.6) {
+                helpOpen = false; setMode(Mode::Globe); faceGlobeTowards(40.7, -74.0); dist = distGoal = earthR + 0.9f; opts.showCities = true;
+                scriptStep = 11; scriptT = tnow;
+            }
+            if (scriptStep == 11 && tnow - scriptT > 1.2) { pendingShot = shotPrefix + "globecities.png"; scriptStep = 12; scriptT = tnow; }
+            if (scriptStep == 12 && tnow - scriptT > 0.3) { switchGlobeToMap(); scriptStep = 13; scriptT = tnow; }
+            if (scriptStep == 13 && (tnow - scriptT > 14.0 || (tnow - scriptT > 5.0 && tiles.pending() == 0))) { pendingShot = shotPrefix + "handoff.png"; scriptStep = 14; scriptT = tnow; }
+            if (scriptStep == 14 && tnow - scriptT > 0.4) { mapWidthPx = screenWidth * 1.0; mapCentreU = 0.45; mapCentreV = 0.4; scriptStep = 15; scriptT = tnow; }
+            if (scriptStep == 15 && tnow - scriptT > 1.5) { pendingShot = shotPrefix + "mapcities.png"; scriptStep = 16; scriptT = tnow; }
+            if (scriptStep == 16 && tnow - scriptT > 0.4) { switchMapToGlobe(); scriptStep = 17; scriptT = tnow; }
+            if (scriptStep == 17 && tnow - scriptT > 1.5) { pendingShot = shotPrefix + "globeback.png"; scriptStep = 18; scriptT = tnow; }
+            if (scriptStep == 18 && tnow - scriptT > 0.6) return true;
             if (frame == 90 || frame == 140 || frame == 190 || frame == 255 || frame == 296 || frame == 325 || frame == 365) pendingShot = shotPrefix + std::to_string(frame) + ".png";
         }
 
@@ -548,6 +593,7 @@ int main(int argc, char** argv) {
             if (IsKeyPressed(KEY_W)) setMode(Mode::Galaxy);
             if (IsKeyPressed(KEY_S)) setMode(Mode::Sky);
             if (IsKeyPressed(KEY_Q)) opts.showConst = !opts.showConst;
+            if (IsKeyPressed(KEY_I)) opts.showCities = !opts.showCities;
             if (IsKeyPressed(KEY_J)) { timeOpen = !timeOpen; if (timeOpen) timeText = fmtClock(simTime, false).substr(0, 16); }
             if (IsKeyPressed(KEY_SPACE)) paused = !paused;
             const double sgn = timeScale < 0 ? -1.0 : 1.0;
@@ -612,6 +658,7 @@ int main(int argc, char** argv) {
             if (wheelDelta != 0.0f) distGoal *= std::pow(0.9f, wheelDelta);
             distGoal = Clamp(distGoal, minDist, 1200.0f);
             dist += (distGoal - dist) * (1.0f - std::exp(-14.0f * frameSeconds));
+            if (wheelDelta > 0.0f && !follow && distGoal <= earthR + 0.55f) switchGlobeToMap();
         } else if (mode == Mode::Solar) {
             applyOrbitDrag(solarCam.yaw, solarCam.pitch, solarCam.yawV, solarCam.pitchV);
             if (wheelDelta != 0.0f) solarCam.goal *= std::pow(0.88, wheelDelta);
@@ -644,6 +691,10 @@ int main(int argc, char** argv) {
                 const Vector2 d = GetMouseDelta();
                 mapCentreU -= d.x / mapWidthPx; mapCentreV -= d.y / mapWidthPx;
                 follow = false;
+            }
+            if (wheelDelta < 0.0f && mapWidthPx <= screenWidth * 1.001) {
+                switchMapToGlobe();
+                return;
             }
             if (wheelDelta != 0.0f) {
                 const Vector2 m = GetMousePosition();
@@ -1196,6 +1247,25 @@ int main(int argc, char** argv) {
         std::unordered_set<long long> labelCells;
         auto labelFree = [&](float x, float y) { return labelCells.insert((long long)((int)(x / 84.0f)) * 100003LL + (int)(y / 15.0f)).second; };
 
+        const float cityFade = opts.baseMap == 0 ? 1.0f : Clamp((float)((10.0 - zoomF) / 4.0), 0.0f, 1.0f);
+        if (opts.showCities && cityFade > 0.01f) {
+            const double minimumImportance = 14.0e6 / std::pow(zoomF, 1.75);
+            for (const City& city : cities) {
+                if (city.importance < minimumImportance) continue;
+                const Vector2 p = latLonToScreen(city.latitude, city.longitude);
+                if (p.x < -40 || p.x > screenWidth + 40 || p.y < -20 || p.y > screenHeight + 20) continue;
+                const float radius = (float)Clamp(2.2 + std::log10(std::max(1.0, city.population / 1.0e5)) * 1.6, 2.2, 5.5) * opts.markerScale;
+                const Color fill = city.capital ? Color{ 255, 214, 110, 255 } : Color{ 236, 241, 250, 255 };
+                DrawCircleV(p, radius + 1.6f, Fade(BLACK, 0.6f * cityFade));
+                DrawCircleV(p, radius, Fade(fill, cityFade));
+                if (city.capital) DrawCircleLines((int)p.x, (int)p.y, radius + 3.0f, Fade(fill, 0.7f * cityFade));
+                if (showLabels && labelFree(p.x + 9, p.y)) {
+                    UiText(city.name.c_str(), (int)p.x + 10, (int)p.y - 6, 13, Fade(BLACK, 0.8f * cityFade));
+                    UiText(city.name.c_str(), (int)p.x + 9, (int)p.y - 7, 13, Fade(city.capital ? Color{ 255, 232, 170, 255 } : WHITE, 0.95f * cityFade));
+                }
+            }
+        }
+
         if (adsb.enabled()) {
             const float sz = (float)Clamp(4.8 + std::log2(std::max(1.0, zoomF)) * 0.45, 4.8, 10.5) * opts.markerScale;
             const bool trails = opts.acTrails && zoomF > 6.0;
@@ -1625,6 +1695,28 @@ int main(int argc, char** argv) {
         }
     };
 
+    auto drawGlobeCities = [&]() {
+        if (mode != Mode::Globe || !opts.showCities) return;
+        const double altitude = std::max(0.05, (double)dist - earthR);
+        const double minimumImportance = 14.0e6 * std::pow(altitude / 16.0, 2.2);
+        std::unordered_set<long long> usedLabelCells;
+        for (const City& city : cities) {
+            if (city.importance < minimumImportance) continue;
+            const Vector3 position = Vector3Transform(Vector3Scale(city.surfaceDirection, earthR * 1.001f), earthModel.transform);
+            if (occludedByBody(cam.position, position, earthR)) continue;
+            const Vector2 p = projectToScreen(position);
+            if (p.x < 0 || p.x > screenWidth || p.y < 0 || p.y > screenHeight) continue;
+            const Color fill = city.capital ? Color{ 255, 214, 110, 255 } : Color{ 236, 241, 250, 255 };
+            DrawCircleV(p, 3.2f * opts.markerScale, Fade(BLACK, 0.6f));
+            DrawCircleV(p, 2.1f * opts.markerScale, fill);
+            const long long cell = (long long)((int)(p.x / 90.0f)) * 100003LL + (int)(p.y / 16.0f);
+            if (showLabels && usedLabelCells.insert(cell).second) {
+                UiText(city.name.c_str(), (int)p.x + 7, (int)p.y - 5, 12, Fade(BLACK, 0.8f));
+                UiText(city.name.c_str(), (int)p.x + 6, (int)p.y - 6, 12, Fade(WHITE, 0.92f));
+            }
+        }
+    };
+
     auto drawSatelliteOverlay = [&]() {
         if (satMode) {
             for (size_t i = 0; i < entities.size(); ++i) {
@@ -1717,7 +1809,7 @@ int main(int argc, char** argv) {
     auto drawLayersPopup = [&]() {
         if (layersOpen) {
             const float pw = 292.0f, lx = std::min(layersX, screenWidth - pw - 8.0f), py = toolbarHeight + 6.0f;
-            const float ph = mode == Mode::Map ? 364.0f : mode == Mode::Globe ? 380.0f : mode == Mode::Sky ? 250.0f : 70.0f;
+            const float ph = mode == Mode::Map ? 392.0f : mode == Mode::Globe ? 408.0f : mode == Mode::Sky ? 250.0f : 70.0f;
             uiShadowBox({ lx, py, pw, ph }, 0.92f);
             ui.region({ lx, py, pw, ph });
             float y = py + 10.0f;
@@ -1736,6 +1828,7 @@ int main(int argc, char** argv) {
                 drawPopupSectionTitle(lx, y, "DISPLAY");
                 ui.toggle(tx, y, tw, "Labels   [L]", showLabels); y += 24;
                 ui.toggle(tx, y, tw, "Ground track   [G]", showTrack); y += 24;
+                ui.toggle(tx, y, tw, "City names   [I]", opts.showCities); y += 24;
                 ui.toggle(tx, y, tw, "Trails behind aircraft and ships", opts.acTrails); y += 24;
             } else if (mode == Mode::Globe) {
                 drawPopupSectionTitle(lx, y, "EARTH");
@@ -1743,6 +1836,7 @@ int main(int argc, char** argv) {
                 ui.toggle(tx, y, tw, "Ocean sun-glint", opts.showSpecular); y += 24;
                 ui.toggle(tx, y, tw, "City lights at night", opts.showNightLights); y += 24;
                 ui.toggle(tx, y, tw, "Constellation lines   [Q]", opts.showConst); y += 24;
+                ui.toggle(tx, y, tw, "City names   [I]", opts.showCities); y += 24;
                 drawPopupSectionTitle(lx, y, "SATELLITES");
                 ui.toggle(tx, y, tw, "Labels   [L]", showLabels); y += 24;
                 ui.toggle(tx, y, tw, "Orbit lines of named objects   [O]", showOrbits); y += 24;
@@ -1819,7 +1913,7 @@ int main(int argc, char** argv) {
                                 { "F", "follow / centre on the selection" }, { "H", "home: station on map, Sun in galaxy" }, { "R", "reset the view" }, { "Esc", "close panels, release, deselect, quit" } };
             const KV col2[] = { { "TIME", "" }, { "Space", "pause" }, { ", .  T  1  N", "slower / faster, reverse, real time, now" }, { "LAYERS", "" }, { "A", "live aircraft (ADS-B)" }, { "B", "ships (AIS)" },
                                 { "D  K  Z  X", "rain radar / clouds / wind / weather at centre" }, { "Y", "cycle base map" }, { "L  O  C  G", "labels / orbits / constellations / ground track" },
-                                { "U", "cycle units" }, { "J", "jump to a date and time" }, { "Q", "constellation lines" }, { "F1  F2  F12", "help / settings / screenshot" } };
+                                { "U", "cycle units" }, { "J", "jump to a date and time" }, { "Q", "constellation lines" }, { "I", "city names" }, { "F1  F2  F12", "help / settings / screenshot" } };
             auto column = [&](const KV* rows, int n, float x0) {
                 float y = hyy + 52.0f;
                 for (int i = 0; i < n; ++i) {
@@ -2226,6 +2320,11 @@ int main(int argc, char** argv) {
             case Mode::Galaxy: drawGalaxyScene(); break;
         }
         drawSatelliteOverlay();
+        drawGlobeCities();
+        if (viewFade > 0.0f) {
+            DrawRectangle(0, 0, (int)screenWidth, (int)screenHeight, Fade(BLACK, viewFade));
+            viewFade = std::max(0.0f, viewFade - frameSeconds * 2.6f);
+        }
         drawToolbar();
         drawTopLeftReadout();
         drawLayersPopup();

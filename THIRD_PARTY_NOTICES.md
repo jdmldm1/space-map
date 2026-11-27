@@ -19,6 +19,7 @@ the license of Space Map's own code; follow the upstream links for the exact ter
 | Star catalogue (`stars.csv`) | [HYG database v4](https://github.com/astronexus/HYG-Database), CC BY-SA 4.0 |
 | Constellation figures (`constellations.txt`) | [Stellarium](https://github.com/Stellarium/stellarium) "modern" sky culture line data, with star positions from HYG |
 | Earth map (`earth.jpg`) | Blue Marble imagery, NASA Earth Observatory |
+| City names (`cities.csv`) | [Natural Earth](https://www.naturalearthdata.com) populated places, public domain |
 | Orbital elements (`tle/`) | [CelesTrak](https://celestrak.org) (snapshot; refreshed at run time) |
 
 ## Fetched at run time (only while the layer is on)

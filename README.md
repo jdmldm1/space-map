@@ -52,6 +52,7 @@ A spiral galaxy with the Sun at its true position and 17,000 real stars, zoomabl
 
 ## Features
 
+- City names on the globe and map, thinning out as you zoom out; zooming the globe all the way in hands over to the street-level map, and zooming the map all the way out returns to the globe
 - Satellite tracking with SGP4 orbit propagation, orbit lines, ground tracks, sunlit/shadow status and visible-pass prediction from your own location
 - Live aircraft (ADS-B) with airline, aircraft type, registration country, climb state and emergency squawks
 - Live ship traffic (AIS) with flag, type, destination, ETA and dimensions, plus a decoder for your own NMEA AIS feed
@@ -85,7 +86,7 @@ Drag to rotate, pan or look around; wheel to zoom; click an object for details; 
 |---|---|
 | `Tab`, `E` `M` `S` `P` `W` | Switch view: Earth, Map, Sky, Solar System, Milky Way |
 | `/` | Search |
-| `A` `B` `D` `K` `Z` `X` | Map layers: aircraft, ships, radar, clouds, wind, weather |
+| `A` `B` `D` `K` `Z` `X` `I` | Map layers: aircraft, ships, radar, clouds, wind, weather, city names |
 | Space, `,` `.` `T` `N` `J` | Pause, speed, reverse, now, jump to a date |
 | `F1` `F2` `F12` | Help, settings, screenshot |
 
