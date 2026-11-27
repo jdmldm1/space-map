@@ -319,6 +319,7 @@ struct IconAtlas {
     // Aircraft: a soft shadow that slides away from the aircraft the higher it flies (alt01 is 0 on the ground, 1 at about FL400).
     void drawAircraft(Icon icon, Vector2 at, float size, float rotationDeg, Color tint, float alt01) const {
         if (size >= 11.0f) {
+            if (size >= 20.0f) { Color glow = tint; glow.a = (unsigned char)(tint.a * 0.17f); draw(icon, at, size * 1.38f, rotationDeg, glow); }  // a faint tinted glow, so the traffic reads like a lit display; skipped on small icons to keep thousands of them fast
             const float off = size * (0.07f + 0.30f * alt01);
             draw(icon, { at.x + off * 0.7f, at.y + off * 0.9f }, size * (1.04f + 0.08f * alt01), rotationDeg, Fade(BLACK, 0.50f - 0.18f * alt01));
         }
@@ -337,6 +338,7 @@ struct IconAtlas {
                     DrawTriangle({ stern.x - px.x * w * f, stern.y - px.y * w * f }, { stern.x + px.x * w * f, stern.y + px.y * w * f }, { stern.x - fx * len * f * 1.0f, stern.y - fy * len * f * 1.0f }, Fade(WHITE, 0.10f));
                 }
             }
+            if (size >= 20.0f) { Color glow = tint; glow.a = (unsigned char)(tint.a * 0.17f); draw(icon, at, size * 1.38f, rotationDeg, glow); }
             draw(icon, { at.x + size * 0.05f, at.y + size * 0.07f }, size * 1.06f, rotationDeg, Fade(BLACK, 0.5f));
         }
         draw(icon, at, size, rotationDeg, tint);

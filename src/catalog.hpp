@@ -132,19 +132,19 @@ inline void classify(Entity& e, bool fromStations) {
     const double apo = e.orbit.a * (1.0 + e.orbit.e);
     if (has(n, "DRAGON") || has(n, "SOYUZ") || has(n, "PROGRESS") || has(n, "CYGNUS") || has(n, "SHENZHOU") ||
         has(n, "TIANZHOU") || has(n, "HTV") || has(n, "STARLINER")) {
-        e.kind = Kind::Ship; e.color = { 255, 170, 40, 255 }; e.labeled = false;
+        e.kind = Kind::Ship; e.color = { 255, 176, 64, 255 }; e.labeled = false;
     } else if (fromStations) {
-        e.kind = Kind::Station; e.color = has(n, "ZARYA") ? Color{ 255, 255, 255, 255 } : Color{ 255, 100, 100, 255 };
+        e.kind = Kind::Station; e.color = has(n, "ZARYA") ? Color{ 255, 255, 255, 255 } : Color{ 255, 110, 100, 255 };
         e.labeled = has(n, "ZARYA") || has(n, "TIANHE");
     } else if (has(n, "STARLINK") || has(n, "ONEWEB") || has(n, "IRIDIUM") || has(n, "GLOBALSTAR") ||
                has(n, "ORBCOMM") || has(n, "KUIPER")) {
-        e.kind = Kind::Constellation; e.color = has(n, "ONEWEB") ? Color{ 255, 150, 60, 255 } : Color{ 80, 200, 255, 255 };
+        e.kind = Kind::Constellation; e.color = has(n, "ONEWEB") ? Color{ 255, 150, 60, 255 } : Color{ 70, 190, 255, 255 };
     } else {
         e.kind = Kind::Satellite;
-        if (e.orbit.e > 0.25) e.color = { 255, 240, 120, 255 };
-        else if (apo > 30000) e.color = { 200, 160, 255, 255 };
-        else if (apo > 3000) e.color = { 90, 255, 120, 255 };
-        else e.color = { 215, 225, 240, 255 };
+        if (e.orbit.e > 0.25) e.color = { 255, 206, 100, 255 };
+        else if (apo > 30000) e.color = { 190, 160, 255, 255 };
+        else if (apo > 3000) e.color = { 110, 240, 170, 255 };
+        else e.color = { 170, 222, 255, 255 };
         e.labeled = (n == "HST");
         if (e.labeled) e.color = { 120, 200, 255, 255 };
     }

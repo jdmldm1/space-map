@@ -1899,7 +1899,7 @@ int main(int argc, char** argv) {
     };
 
     // ---- Tactical view (Map): dimmed map, geodesic range rings and bearing lines, NATO-style track symbols, velocity leaders ----
-    const Color tacCiv{ 80, 220, 255, 255 }, tacMil{ 255, 140, 60, 255 }, tacGreen{ 90, 255, 140, 255 };
+    const Color tacCiv{ 80, 220, 255, 255 }, tacMil = kMilitaryColor, tacGreen{ 90, 255, 140, 255 };
     static const double kUnitKm[3] = { 1.0, 1.609344, 1.852 };
     static const char* kUnitName[3] = { "km", "mi", "nm" };
     setTactical = [&](bool on) {
@@ -2367,7 +2367,7 @@ int main(int argc, char** argv) {
                 const Vector2 p = aircraftScreen[i];
                 if (p.x < -30 || p.x > screenWidth + 30 || p.y < -30 || p.y > screenHeight + 30) continue;
                 const bool sel = a.hex == selectedAc, hov = (int)i == hoveredAc;
-                const Color c = a.ground ? Color{ 140, 140, 150, 255 } : (a.hasAlt ? altColor(a.altFt) : Color{ 200, 200, 200, 255 });
+                const Color c = a.ground ? Color{ 120, 135, 150, 255 } : a.mil ? kMilitaryColor : (a.hasAlt ? altColor(a.altFt) : Color{ 190, 205, 220, 255 });
                 if ((trails || sel) && a.trail.size() > 1) {
                     Vector2 prev = latLonToScreen(a.trail[0].first, a.trail[0].second);
                     for (size_t k = 1; k < a.trail.size(); ++k) {
@@ -2395,6 +2395,11 @@ int main(int argc, char** argv) {
                 } else {
                     icons.drawAircraft(aircraftGlyph, p, glyph, (float)a.track, a.ground ? Fade(c, 0.8f) : c, a.ground ? 0.0f : (float)Clamp(a.altFt / 40000.0, 0.0, 1.0));
                     if (a.mil) DrawCircleLines((int)p.x, (int)p.y, glyph * 0.62f + 2.0f, Fade(Color{ 255, 120, 50, 255 }, 0.9f));
+                }
+                if (a.squawk == "7700" || a.squawk == "7600" || a.squawk == "7500") {  // emergency squawk: a pulsing red alert ring
+                    const float ph = (float)std::fmod(GetTime() * 1.5, 1.0);
+                    DrawCircleLines((int)p.x, (int)p.y, s + 4.0f, Color{ 255, 64, 64, 255 });
+                    DrawCircleLines((int)p.x, (int)p.y, s + 4.0f + ph * s * 3.0f, Fade(Color{ 255, 64, 64, 255 }, 1.0f - ph));
                 }
                 if (sel) DrawCircleLines((int)p.x, (int)p.y, s + 6, WHITE);
                 if (!opts.tactical && ((showLabels && zoomF > 14.0 && !a.call.empty() && labelFree(p.x, p.y)) || sel || hov))
@@ -2436,7 +2441,7 @@ int main(int argc, char** argv) {
                 const Vector2 p = shipScreen[i];
                 if (p.x < -60 || p.x > screenWidth + 60 || p.y < -60 || p.y > screenHeight + 60) continue;
                 const int cat = ais::category(v.shipType);
-                const Color c = v.shipType == 0 ? Color{ 170, 176, 188, 255 } : cat == 0 ? Color{ 90, 214, 120, 255 } : cat == 1 ? Color{ 242, 92, 82, 255 } : cat == 2 ? Color{ 92, 172, 255, 255 } : cat == 3 ? Color{ 255, 172, 62, 255 } : Color{ 200, 172, 255, 255 };
+                const Color c = shipColor(cat, v.shipType);
                 const bool sel = v.mmsi == selectedShip, hov = (int)i == hoveredShip;
                 if (((opts.acTrails && zoomF > 6.0) || sel) && v.trail.size() > 1) {
                     Vector2 prev = latLonToScreen(v.trail[0].first, v.trail[0].second);
@@ -3692,7 +3697,7 @@ int main(int argc, char** argv) {
             if (shipsOn) {
                 ly -= 40.0f;
                 UiText("Vessels", 14, (int)ly, 11, mutedColor);
-                const struct { const char* n; Color c; } kinds[] = { { "Cargo", { 90, 214, 120, 255 } }, { "Tanker", { 242, 92, 82, 255 } }, { "Passenger", { 92, 172, 255, 255 } }, { "Fishing", { 255, 172, 62, 255 } }, { "Other", { 200, 172, 255, 255 } } };
+                const struct { const char* n; Color c; } kinds[] = { { "Cargo", shipColor(0, 70) }, { "Tanker", shipColor(1, 80) }, { "Passenger", shipColor(2, 60) }, { "Fishing", shipColor(3, 30) }, { "Other", shipColor(4, 50) }, { "Military", kMilitaryColor } };
                 float kx = 14.0f;
                 for (const auto& k : kinds) { DrawRectangle((int)kx, (int)ly + 19, 9, 9, k.c); UiText(k.n, (int)kx + 13, (int)ly + 16, 11, mutedColor); kx += 18.0f + UiMeasure(k.n, 11) + 8.0f; }
                 ly -= 4.0f;
@@ -3905,7 +3910,7 @@ int main(int argc, char** argv) {
     auto drawInfoPanels = [&]() {
         const int px = (int)screenWidth - 300;
         const int py0 = (int)toolbarHeight + 10;
-        const Color classCol[] = { { 215, 225, 240, 255 }, { 90, 255, 120, 255 }, { 200, 160, 255, 255 }, { 255, 240, 120, 255 } };
+        const Color classCol[] = { { 170, 222, 255, 255 }, { 110, 240, 170, 255 }, { 190, 160, 255, 255 }, { 255, 206, 100, 255 } };
         const char* classNames[] = { "Low Earth orbit (LEO)", "Medium Earth orbit (MEO)", "Geostationary / geosynchronous", "Highly elliptical (HEO)" };
         hoverTitle.clear(); hoverDetail.clear();
         if (!routeForced) routeShown = false;
@@ -4170,7 +4175,7 @@ int main(int argc, char** argv) {
                     const Vessel& v = ships[i];
                     const int cat = ais::category(v.shipType);
                     pd.title = v.name.empty() ? std::string(TextFormat("MMSI %d", v.mmsi)) : v.name;
-                    pd.tc = v.shipType == 0 ? Color{ 170, 176, 188, 255 } : cat == 0 ? Color{ 90, 214, 120, 255 } : cat == 1 ? Color{ 242, 92, 82, 255 } : cat == 2 ? Color{ 92, 172, 255, 255 } : cat == 3 ? Color{ 255, 172, 62, 255 } : Color{ 200, 172, 255, 255 };
+                    pd.tc = shipColor(cat, v.shipType);
                     pd.sub = std::string(v.shipType ? ais::shipTypeName(v.shipType) : "Vessel (AIS)") + (ais::mmsiCountry(v.mmsi)[0] ? std::string("  ·  ") + ais::mmsiCountry(v.mmsi) : "");
                     {
                         cardOn = true;

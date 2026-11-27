@@ -149,16 +149,33 @@ struct PointCanvas {
     }
 };
 
+// Tactical palette. Aircraft altitude runs from amber near the ground through mint and cyan to ice-white at cruising
+// height, so busy skies stay legible and the high traffic glows against a dark map.
 inline Color altColor(double ft) {
-    static const double s[][4] = { { 0, 255, 90, 60 }, { 5000, 255, 170, 40 }, { 10000, 235, 230, 60 }, { 20000, 90, 230, 110 },
-                                   { 30000, 70, 200, 240 }, { 40000, 120, 130, 255 }, { 46000, 200, 110, 255 } };
-    const int n = 7;
-    if (ft <= s[0][0]) return { 255, 90, 60, 255 };
+    static const double s[][4] = { { 0, 255, 176, 64 }, { 6000, 240, 214, 96 }, { 14000, 120, 224, 168 }, { 24000, 70, 208, 236 },
+                                   { 34000, 120, 176, 255 }, { 44000, 215, 228, 255 } };
+    const int n = 6;
+    if (ft <= s[0][0]) return { 255, 176, 64, 255 };
     for (int i = 1; i < n; ++i)
         if (ft <= s[i][0]) {
             const double t = (ft - s[i - 1][0]) / (s[i][0] - s[i - 1][0]);
             return { (unsigned char)(s[i - 1][1] + t * (s[i][1] - s[i - 1][1])), (unsigned char)(s[i - 1][2] + t * (s[i][2] - s[i - 1][2])),
                      (unsigned char)(s[i - 1][3] + t * (s[i][3] - s[i - 1][3])), 255 };
         }
-    return { 200, 110, 255, 255 };
+    return { 215, 228, 255, 255 };
+}
+
+inline constexpr Color kMilitaryColor{ 255, 128, 60, 255 };
+
+// Vessel colour by AIS category (0 cargo, 1 tanker, 2 passenger, 3 fishing, 4 other) and raw AIS ship type.
+inline Color shipColor(int category, int shipType) {
+    if (shipType == 35 || shipType == 55) return kMilitaryColor;
+    if (shipType == 0) return { 160, 172, 188, 255 };
+    switch (category) {
+        case 0: return { 104, 214, 168, 255 };
+        case 1: return { 255, 118, 96, 255 };
+        case 2: return { 120, 190, 255, 255 };
+        case 3: return { 255, 206, 100, 255 };
+        default: return { 184, 160, 255, 255 };
+    }
 }
