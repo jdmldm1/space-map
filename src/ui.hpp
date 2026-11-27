@@ -49,6 +49,11 @@ struct Options {
     float radarOpacity = 0.75f;
     bool radarOn = false, cloudsOn = false, windOn = false;
     bool showHints = true, vsync = true, showStatus = true;
+    bool showMissions = true, showDeepSky = true;
+    bool satCat[6] = { true, true, true, true, true, true };  // satellite group filters
+    int passHours = 0, passMinEl = 0, alertLead = 1;       // planner horizon (24h/3d/7d), min elevation (0/10/20/30), alert lead (5/10/30 min)
+    bool passAlerts = false, osNotify = true;
+    int missionTrails = 0;  // 0 = short tails around each spacecraft, 1 = full paths, 2 = selected only
     std::string aisNmea;
     std::string radarNote;
 
@@ -71,9 +76,10 @@ struct Options {
         I("units", units); B("localTime", localTime); F("markerScale", markerScale); F("starBright", starBright); B("showClouds", showClouds); B("showNightLights", showNightLights); B("showConst", showConst); B("showCities", showCities); B("showSpecular", showSpecular);
         B("satLEO", satLEO); B("satMEO", satMEO); B("satGEO", satGEO); B("satHEO", satHEO); B("acGround", acGround); B("acTrails", acTrails); I("acMinAlt", acMinAlt);
         B("shipCargo", shipCargo); B("shipTanker", shipTanker); B("shipPass", shipPass); B("shipFish", shipFish); B("shipOther", shipOther); B("shipMoving", shipMoving);
-        I("baseMap", baseMap); F("radarOpacity", radarOpacity); B("showHints", showHints); B("vsync", vsync); B("showStatus", showStatus);
+        I("baseMap", baseMap); F("radarOpacity", radarOpacity); B("showHints", showHints); B("vsync", vsync); B("showStatus", showStatus); B("showMissions", showMissions); B("showDeepSky", showDeepSky); I("missionTrails", missionTrails); I("passHours", passHours); I("passMinEl", passMinEl); I("alertLead", alertLead); B("passAlerts", passAlerts); B("osNotify", osNotify);
+        if (kv.count("satCats")) { const std::string& sc = kv["satCats"]; for (int i = 0; i < 6 && i < (int)sc.size(); ++i) satCat[i] = sc[i] != '0'; }
         if (kv.count("ais_nmea")) aisNmea = kv["ais_nmea"];
-        units = std::clamp(units, 0, 2); baseMap = std::clamp(baseMap, 0, 3); acMinAlt = std::clamp(acMinAlt, 0, 3);
+        missionTrails = std::clamp(missionTrails, 0, 2); passHours = std::clamp(passHours, 0, 2); passMinEl = std::clamp(passMinEl, 0, 3); alertLead = std::clamp(alertLead, 0, 2); units = std::clamp(units, 0, 2); baseMap = std::clamp(baseMap, 0, 3); acMinAlt = std::clamp(acMinAlt, 0, 3);
         markerScale = std::clamp(markerScale, 0.5f, 2.5f); starBright = std::clamp(starBright, 0.4f, 2.0f); radarOpacity = std::clamp(radarOpacity, 0.2f, 1.0f);
     }
     void save() const {
@@ -83,7 +89,7 @@ struct Options {
           << "\nshowSpecular=" << showSpecular << "\nsatLEO=" << satLEO << "\nsatMEO=" << satMEO << "\nsatGEO=" << satGEO << "\nsatHEO=" << satHEO
           << "\nacGround=" << acGround << "\nacTrails=" << acTrails << "\nacMinAlt=" << acMinAlt << "\nshipCargo=" << shipCargo << "\nshipTanker=" << shipTanker
           << "\nshipPass=" << shipPass << "\nshipFish=" << shipFish << "\nshipOther=" << shipOther << "\nshipMoving=" << shipMoving << "\nbaseMap=" << baseMap
-          << "\nradarOpacity=" << radarOpacity << "\nshowHints=" << showHints << "\nvsync=" << vsync << "\nshowStatus=" << showStatus << "\nais_nmea=" << aisNmea << "\n";
+          << "\nradarOpacity=" << radarOpacity << "\nshowHints=" << showHints << "\nvsync=" << vsync << "\nshowStatus=" << showStatus << "\nshowMissions=" << showMissions << "\nshowDeepSky=" << showDeepSky << "\nmissionTrails=" << missionTrails << "\npassHours=" << passHours << "\npassMinEl=" << passMinEl << "\nalertLead=" << alertLead << "\npassAlerts=" << passAlerts << "\nosNotify=" << osNotify << "\nsatCats=" << (satCat[0] ? 1 : 0) << (satCat[1] ? 1 : 0) << (satCat[2] ? 1 : 0) << (satCat[3] ? 1 : 0) << (satCat[4] ? 1 : 0) << (satCat[5] ? 1 : 0) << "\nais_nmea=" << aisNmea << "\n";
     }
 };
 
@@ -117,7 +123,7 @@ inline std::string fmtTemp(const Options& o, double c) {
     return b;
 }
 
-struct Row { std::string k, v; Color c = { 235, 238, 245, 255 }; bool sep = false; };
+struct Row { std::string k, v; Color c = { 235, 238, 245, 255 }; bool sep = false; bool wide = false; };
 struct PanelData { std::string title, sub; Color tc = WHITE; std::vector<Row> rows; };
 
 inline void uiShadowBox(Rectangle r, float alpha = 0.78f) {
@@ -128,7 +134,7 @@ inline void uiShadowBox(Rectangle r, float alpha = 0.78f) {
 
 inline int uiDrawPanel(const PanelData& p, int x, int y, int w) {
     int h = 58;
-    for (const Row& r : p.rows) h += r.sep ? 26 : 20;
+    for (const Row& r : p.rows) h += r.sep ? 26 : r.wide ? 18 : 20;
     h += 6;
     uiShadowBox({ (float)x, (float)y, (float)w, (float)h });
     DrawRectangle(x + 1, y + 1, 4, 52, Fade(p.tc, 0.9f));
@@ -140,6 +146,9 @@ inline int uiDrawPanel(const PanelData& p, int x, int y, int w) {
             DrawLine(x + 12, yy + 14, x + w - 12, yy + 14, Fade(WHITE, 0.10f));
             UiText(r.k.c_str(), x + 14, yy + 2, 11, { 120, 130, 150, 255 });
             yy += 26;
+        } else if (r.wide) {
+            UiText(r.v.c_str(), x + 14, yy, 13, r.c);
+            yy += 18;
         } else {
             UiText(r.k.c_str(), x + 14, yy, 13, { 140, 150, 170, 255 });
             UiText(r.v.c_str(), x + 108, yy - 1, 14, r.c);

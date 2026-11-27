@@ -7,3 +7,7 @@ dist/
 /spacemap_station.txt
 /earth_hd.jpg
 /earth_night.jpg
+/spacemap_favs.txt
+/spacemap_passes.ics
+__pycache__/
+/history_*.bin

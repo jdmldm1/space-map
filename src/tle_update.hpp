@@ -12,12 +12,21 @@
 
 class TleUpdater {
 public:
-    ~TleUpdater() { if (worker_.joinable()) worker_.detach(); }
+    ~TleUpdater() { quit_ = true; if (worker_.joinable()) worker_.detach(); }
 
+    // Checks at start-up and then every 30 minutes; files younger than 12 hours are left alone, so this is cheap.
     void start(const std::string& directory) {
         directory_ = directory;
-        worker_ = std::thread([this] { refreshStaleFiles(); });
+        worker_ = std::thread([this] {
+            while (!quit_) {
+                refreshStaleFiles();
+                for (int i = 0; i < 1800 && !quit_; ++i) std::this_thread::sleep_for(std::chrono::seconds(1));
+            }
+        });
     }
+
+    // True once after new element sets have been downloaded, so the app can reload them.
+    bool takeUpdated() { return updated_.exchange(false); }
 
     std::string status() {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -60,7 +69,7 @@ private:
                 fs::remove(download, ignored);
             }
         }
-        if (updated) setStatus("Satellite elements refreshed (applied at next launch)");
+        if (updated) { setStatus("Satellite elements refreshed"); updated_ = true; }
     }
 
     void setStatus(const std::string& text) {
@@ -69,6 +78,7 @@ private:
     }
 
     std::string directory_, status_;
+    std::atomic<bool> quit_{ false }, updated_{ false };
     std::mutex mutex_;
     std::thread worker_;
 };

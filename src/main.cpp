@@ -10,6 +10,8 @@
 #include <cstdlib>
 #include <ctime>
 #include <fstream>
+#include <functional>
+#include <set>
 #include <string>
 #include <thread>
 #include <unordered_set>
@@ -20,9 +22,17 @@
 #include "cities.hpp"
 #include "earthhd.hpp"
 #include "formatting.hpp"
+#include "alerts.hpp"
+#include "deepsky.hpp"
+#include "eclipses.hpp"
 #include "galaxy.hpp"
+#include "hazards.hpp"
+#include "history.hpp"
+#include "icons.hpp"
+#include "launches.hpp"
 #include "icon_png.hpp"
 #include "meta.hpp"
+#include "missions.hpp"
 #include "observer.hpp"
 #include "orbit.hpp"
 #include "paths.hpp"
@@ -44,9 +54,14 @@ static void traceFilter(int level, const char* text, va_list args) {
 }
 
 int main(int argc, char** argv) {
-    std::string shotPrefix;
+    std::string shotPrefix, scenario, scenarioPrefix = "scn_";
     bool benchMode = false;
-    for (int i = 1; i < argc; ++i) { if (i + 1 < argc && std::string(argv[i]) == "--shot") shotPrefix = argv[i + 1]; if (std::string(argv[i]) == "--bench") benchMode = true; }
+    for (int i = 1; i < argc; ++i) {
+        if (i + 1 < argc && std::string(argv[i]) == "--shot") shotPrefix = argv[i + 1];
+        if (i + 1 < argc && std::string(argv[i]) == "--scenario") scenario = argv[i + 1];
+        if (i + 1 < argc && std::string(argv[i]) == "--scenario-prefix") scenarioPrefix = argv[i + 1];
+        if (std::string(argv[i]) == "--bench") benchMode = true;
+    }
 
     SetTraceLogCallback(traceFilter);
     SetConfigFlags(FLAG_MSAA_4X_HINT | FLAG_VSYNC_HINT | FLAG_WINDOW_RESIZABLE | FLAG_WINDOW_HIGHDPI);
@@ -60,6 +75,9 @@ int main(int argc, char** argv) {
     Options opts;
     opts.load();
     uiLoadFont();
+    IconAtlas icons;
+    icons.build();
+    bool iconSheet = false;
     if (!opts.vsync) ClearWindowState(FLAG_VSYNC_HINT);
     Ui ui;
 
@@ -129,9 +147,17 @@ int main(int argc, char** argv) {
     const int galSunIdx = galaxyScene.sunIndex, galGcIdx = galaxyScene.centreIndex;
     const std::vector<Rock> rocks = buildSmallBodyField();
     const SmallBody halleyBody = halley();
+    const std::vector<DeepSkyObject> deepSky = loadDeepSky();
 
-    const int BODY_HALLEY = NPLANETS, BODY_SUN = NPLANETS + 1;
-    std::vector<Vec3d> bodyPos(NPLANETS + 2);
+    std::vector<Mission> missions = loadMissions();
+    const PlanetTracks planetTracks = loadPlanetTracks();
+    std::vector<int> helioMissions, earthMissions, missionBody(missions.size(), -1);
+    for (size_t i = 0; i < missions.size(); ++i) {
+        if (missions[i].frame == MFrame::Sun) { missionBody[i] = NPLANETS + 2 + (int)helioMissions.size(); helioMissions.push_back((int)i); }
+        else earthMissions.push_back((int)i);
+    }
+    const int BODY_HALLEY = NPLANETS, BODY_SUN = NPLANETS + 1, BODY_MISSION0 = NPLANETS + 2;
+    std::vector<Vec3d> bodyPos(NPLANETS + 2 + helioMissions.size());
 
     TileCache tiles(paths::dataPath("tiles"));
     bool tilesStarted = false;
@@ -144,6 +170,18 @@ int main(int argc, char** argv) {
     radarFeed.start();
     WeatherFeed wx(appDir);
     wx.start();
+    HazardFeed hazards(appDir);
+    hazards.start();
+    LaunchFeed launchFeed(appDir + "launch_tmp.json");
+    launchFeed.start();
+    bool quakesOn = false, eventsOn = false, auroraOn = false, launchesOn = false, decayOn = false;
+    std::vector<Quake> quakeList;
+    std::vector<NaturalEvent> eventList;
+    std::vector<AuroraPoint> auroraList;
+    std::vector<Launch> launchList;
+    SpaceWeather spaceWx;
+    unsigned hazardVer = ~0u, launchVer = ~0u;
+    std::string hazardTip;
     std::vector<Vessel> ships;
     unsigned shipVer = 0;
     std::vector<Vector2> shipScreen;
@@ -187,6 +225,12 @@ int main(int argc, char** argv) {
     double simTime = nowUnix(), timeScale = 1.0;
     bool paused = false, showLabels = true, showOrbits = false, showConstellation = true, showTrack = true;
     int selected = -1, hovered = -1, selBody = -1, hovBody = -1, selGal = -1, hovGal = -1;
+    int selMission = -1, hovMission = -1, missionFilter = 0;
+    bool missionsOpen = false, eclipsesOpen = false;
+    float eclipsesX = 8.0f;
+    std::vector<Eclipse> eclipseList;
+    double eclipseFrom = -1e18;
+    float missionScroll = 0.0f, missionsX = 8.0f;
     float dragDist = 0.0f;
     bool followBody = false, followGal = false;
 
@@ -212,13 +256,15 @@ int main(int argc, char** argv) {
     std::string query;
     std::vector<int> matches;
     int matchSel = 0;
-    auto candCount = [&]() -> size_t { return mode == Mode::Solar ? (size_t)NPLANETS + 2 : mode == Mode::Galaxy ? gal.size() : entities.size(); };
+    auto candCount = [&]() -> size_t { return mode == Mode::Solar ? (size_t)BODY_MISSION0 + helioMissions.size() : mode == Mode::Galaxy ? gal.size() : entities.size(); };
     auto candName = [&](size_t i) -> std::string {
+        if (mode == Mode::Solar && i >= (size_t)BODY_MISSION0) return missions[helioMissions[i - BODY_MISSION0]].name;
         if (mode == Mode::Solar) return i < (size_t)NPLANETS ? PLANETS[i].name : i == (size_t)BODY_HALLEY ? "Halley" : "Sun";
         if (mode == Mode::Galaxy) return gal[i].name;
         return entities[i].name;
     };
     auto candColor = [&](size_t i) -> Color {
+        if (mode == Mode::Solar && i >= (size_t)BODY_MISSION0) return missions[helioMissions[i - BODY_MISSION0]].color;
         if (mode == Mode::Solar) return i < (size_t)NPLANETS ? Color{ PLANETS[i].r, PLANETS[i].g, PLANETS[i].b, 255 } : Color{ 255, 230, 150, 255 };
         if (mode == Mode::Galaxy) return gal[i].col;
         return entities[i].color;
@@ -250,6 +296,10 @@ int main(int argc, char** argv) {
     auto focus = [&](int idx) {
         if (mode == Mode::Solar) {
             selBody = idx; followBody = true;
+            if (idx >= BODY_MISSION0) {
+                const Vec3d mp = bodyPos[idx];
+                solarCam.goal = std::clamp(std::sqrt(mp.x * mp.x + mp.y * mp.y + mp.z * mp.z) * 0.25, 0.02, 40.0);
+            } else
             solarCam.goal = idx == BODY_SUN ? 0.08 : idx == BODY_HALLEY ? 0.5 : std::max(0.01, PLANETS[idx].radiusKm / AU_KM * 40.0);
         } else if (mode == Mode::Galaxy) {
             selGal = idx; followGal = true; galCam.tgoal = gal[idx].pos;
@@ -268,12 +318,119 @@ int main(int argc, char** argv) {
     std::vector<int> notable;
     for (size_t i = 0; i < entities.size(); ++i) if (entities[i].labeled && entities[i].name.find("ZVEZDA") == std::string::npos) notable.push_back((int)i);
 
+    // ---- Favourites, pass alerts and live catalogue refresh ------------------------------------------------------
+    const double kPassHours[3] = { 24.0, 72.0, 168.0 }, kMinElDeg[4] = { 0.0, 10.0, 20.0, 30.0 }, kLeadMinutes[3] = { 5.0, 10.0, 30.0 };
+    const char* kPassHoursName[3] = { "24 hours", "3 days", "7 days" };
+    const std::string favFile = paths::dataPath("spacemap_favs.txt");
+    std::set<int> favourites;
+    { std::ifstream f(favFile); int id; while (f >> id) favourites.insert(id); }
+    std::vector<char> origLabeled;
+    double newestEpoch = 0;
+    int passCfg = -1, skyPassCfg = -1;
+    struct WatchPass { int ent; Pass ps; };
+    std::vector<WatchPass> watchPasses;
+    double watchAt = -1e9;
+    int watchVer = -1;
+    std::set<std::string> notifiedPasses;
+    struct Banner { std::string text; double until; Color accent; };
+    std::vector<Banner> banners;
+    auto pushBanner = [&](const std::string& text, Color accent) {
+        banners.push_back({ text, steadySeconds() + 14.0, accent });
+        if (banners.size() > 4) banners.erase(banners.begin());
+    };
+    // Favourites are always labelled and feed the pass planner and alerts.
+    auto applyFavourites = [&]() {
+        for (size_t i = 0; i < entities.size(); ++i) {
+            Entity& e = entities[i];
+            e.labeled = origLabeled[i] || favourites.count(e.norad) > 0;
+            if (e.kind == Kind::Satellite) e.dot = !e.labeled;
+        }
+        notable.clear();
+        for (size_t i = 0; i < entities.size(); ++i) if (entities[i].labeled && entities[i].name.find("ZVEZDA") == std::string::npos) notable.push_back((int)i);
+    };
+    // Rebuilds everything that is sized per satellite after the catalogue changes.
+    auto adoptCatalog = [&]() {
+        origLabeled.assign(entities.size(), 0);
+        newestEpoch = 0;
+        for (size_t i = 0; i < entities.size(); ++i) { origLabeled[i] = entities[i].labeled; newestEpoch = std::max(newestEpoch, entities[i].orbit.epoch); }
+        screenPositions.assign(entities.size(), Vector2{});
+        vis.assign(entities.size(), 0);
+        skyLit.assign(entities.size(), 1);
+        applyFavourites();
+    };
+    adoptCatalog();
+    auto reloadCatalog = [&]() {
+        const int selNorad = selected >= 0 && selected < (int)entities.size() ? entities[selected].norad : 0;
+        std::vector<Entity> fresh = loadSatelliteCatalog(earth);
+        if (fresh.size() < 100) return;
+        entities.swap(fresh);
+        adoptCatalog();
+        selected = -1; hovered = -1;
+        if (selNorad) for (size_t i = 0; i < entities.size(); ++i) if (entities[i].norad == selNorad) { selected = (int)i; break; }
+        passSel = -2; skyPassVer = -1; watchVer = -1; matches.clear(); matchSel = 0;
+        pushBanner("Satellite orbital elements updated", { 90, 200, 255, 255 });
+    };
+    auto toggleFavourite = [&](int ei) {
+        const int id = entities[ei].norad;
+        if (!id) return;
+        if (!favourites.erase(id)) favourites.insert(id);
+        applyFavourites();
+        watchVer = -1; skyPassVer = -1;
+        std::ofstream f(favFile);
+        for (int v : favourites) f << v << "\n";
+    };
+    // Looks for visible passes of the watched satellites (the labelled ones plus favourites) and warns shortly before each.
+    auto updateAlerts = [&]() {
+        if (!opts.passAlerts || !station.set || entities.empty()) return;
+        const double now = nowUnix(), sNow = steadySeconds();
+        if (watchVer != stationVer || sNow - watchAt > 600.0) {
+            watchPasses.clear();
+            for (int ei : notable) for (const Pass& ps : computePasses(entities[ei], station, now, earth.radiusKm, 24.0, 6, kMinElDeg[opts.passMinEl] * DEG)) if (ps.vis) watchPasses.push_back({ ei, ps });
+            watchAt = sNow; watchVer = stationVer;
+        }
+        for (const WatchPass& w : watchPasses) {
+            const std::string key = std::to_string(entities[w.ent].norad) + ":" + std::to_string((long long)w.ps.aos);
+            const double ahead = w.ps.aos - now;
+            if (notifiedPasses.count(key) || ahead > kLeadMinutes[opts.alertLead] * 60.0 || w.ps.los < now) continue;
+            notifiedPasses.insert(key);
+            const int minutes = (int)std::ceil(std::max(0.0, ahead) / 60.0);
+            const std::string name = entities[w.ent].name;
+            const std::string when = ahead > 30.0 ? "rises in " + std::to_string(minutes) + " min" : "is rising now";
+            const std::string text = name + " " + when + ": max " + std::to_string((int)(w.ps.maxEl / DEG)) + " deg, " + compassPoint(w.ps.aosAz) + " to " + compassPoint(w.ps.losAz) + ", visible";
+            pushBanner(text, { 120, 255, 160, 255 });
+            if (opts.osNotify) osNotify("Satellite pass: " + name, text);
+        }
+    };
+    // Writes the next week of passes for the watched satellites to a calendar file.
+    auto exportPassCalendar = [&]() {
+        if (!station.set) { pushBanner("Right-click the globe or map to set your ground station first", { 255, 200, 90, 255 }); return; }
+        const double now = nowUnix();
+        std::vector<IcsEvent> events;
+        for (int ei : notable) {
+            const Entity& e = entities[ei];
+            for (const Pass& ps : computePasses(e, station, now, earth.radiusKm, 168.0, 40, kMinElDeg[opts.passMinEl] * DEG)) {
+                if (skyVisOnly && !ps.vis) continue;
+                IcsEvent ev;
+                ev.uid = std::to_string(e.norad) + "-" + std::to_string((long long)ps.aos) + "@spacemap";
+                ev.summary = e.name + " pass" + (ps.vis ? " (visible)" : "") + ", max " + std::to_string((int)(ps.maxEl / DEG)) + " deg";
+                ev.description = std::string("Rises ") + compassPoint(ps.aosAz) + ", peaks " + std::to_string((int)(ps.maxEl / DEG)) + " deg in the " + compassPoint(ps.peakAz) + ", sets " + compassPoint(ps.losAz) +
+                                 (ps.vis ? ". Sunlit satellite against a dark sky: visible to the naked eye." : ". Not a naked-eye pass (satellite in shadow or sky too bright).");
+                ev.location = std::string(TextFormat("%.4f, %.4f", station.lat, station.lon));
+                ev.start = ps.aos; ev.end = ps.los;
+                events.push_back(std::move(ev));
+            }
+        }
+        const std::string path = paths::dataPath("spacemap_passes.ics");
+        if (writeIcs(path, events, now)) pushBanner(std::string(TextFormat("Saved %zu passes to ", events.size())) + path, { 90, 200, 255, 255 });
+        else pushBanner("Could not write " + path, { 255, 110, 90, 255 });
+    };
+
     bool timeOpen = false;
     std::string timeText;
     int frame = 0;
     int scriptStep = 0;
     double scriptT = 0;
-    auto orbitOn = [&](const Entity& e) { return e.oclass == 0 ? opts.satLEO : e.oclass == 1 ? opts.satMEO : e.oclass == 2 ? opts.satGEO : opts.satHEO; };
+    auto orbitOn = [&](const Entity& e) { if (!opts.satCat[e.cat < 6 ? e.cat : 5]) return false; return e.oclass == 0 ? opts.satLEO : e.oclass == 1 ? opts.satMEO : e.oclass == 2 ? opts.satGEO : opts.satHEO; };
 
     float frameSeconds = 0.0f, screenWidth = 0.0f, screenHeight = 0.0f, wheelDelta = 0.0f, nightAmt = 0.0f, nearP = 0.01f;
     bool satMode = false, dragging = false, pickOk = false, showQuickToggles = false;
@@ -293,6 +450,109 @@ int main(int argc, char** argv) {
     std::string hoverTitle, hoverDetail;
     const Color mutedColor{ 150, 158, 175, 255 }, positiveColor{ 90, 255, 140, 255 }, textColor{ 235, 238, 245, 255 };
     const float toolbarHeight = 34.0f;
+
+    // ---- Aircraft and ship history with replay ---------------------------------------------------------------
+    TrackHistory acHist, shipHist;
+    const std::string acHistFile = paths::dataPath("history_aircraft.bin"), shipHistFile = paths::dataPath("history_ships.bin");
+    acHist.load(acHistFile); shipHist.load(shipHistFile);
+    acHist.prune(nowUnix(), 3.0 * 3600.0); shipHist.prune(nowUnix(), 3.0 * 3600.0);
+    unsigned histAcVer = 0, histShipVer = 0;
+    double histPruneAt = 0, histSaveAt = 0;
+    bool replayOn = false, replayPlay = false;
+    float replayBackMin = 30.0f;
+    auto recordHistory = [&]() {
+        const double nowT = nowUnix(), sNow = steadySeconds();
+        if (adsb.enabled() && adsb.version() != histAcVer) {
+            histAcVer = adsb.version();
+            for (const Aircraft& a : adsb.snapshot())
+                acHist.add(a.hex, a.call, a.type, 0, { nowT - std::max(0.0, sNow - a.stamp), (float)a.lat, (float)a.lon, a.hasAlt ? (float)a.altFt : -1.0f, (float)a.track, a.ground }, 25.0);
+        }
+        if (shipsOn && ais.version() != histShipVer) {
+            histShipVer = ais.version();
+            for (const Vessel& v : ais.snapshot())
+                shipHist.add(std::to_string(v.mmsi), v.name, "", v.shipType, { nowT - std::max(0.0, sNow - v.stamp), (float)v.lat, (float)v.lon, -1.0f, (float)v.cog, false }, 60.0);
+        }
+        if (sNow - histPruneAt > 60.0) { histPruneAt = sNow; acHist.prune(nowT, 3.0 * 3600.0); shipHist.prune(nowT, 3.0 * 3600.0); }
+        if (sNow - histSaveAt > 300.0) { histSaveAt = sNow; if (histSaveAt > 1.0 && (acHist.sampleCount() || shipHist.sampleCount())) { acHist.save(acHistFile); shipHist.save(shipHistFile); } }
+        if (replayOn && replayPlay) { replayBackMin -= frameSeconds * 2.0f; if (replayBackMin <= 0.0f) { replayBackMin = 0.0f; replayOn = false; replayPlay = false; } }
+    };
+    auto aircraftAtReplay = [&]() {
+        std::vector<Aircraft> out;
+        const double t = nowUnix() - replayBackMin * 60.0;
+        HistSample st; std::vector<std::pair<float, float>> trail;
+        for (const auto& kv : acHist.tracks) {
+            if (!TrackHistory::stateAt(kv.second, t, 120.0, st, &trail, 1800.0)) continue;
+            Aircraft a;
+            a.hex = kv.first; a.call = kv.second.label; a.type = kv.second.type;
+            a.lat = st.lat; a.lon = st.lon; a.altFt = std::max(0.0f, st.alt); a.hasAlt = st.alt >= 0; a.ground = st.ground; a.track = st.heading;
+            a.stamp = steadyNow; a.trail = trail;
+            out.push_back(std::move(a));
+        }
+        return out;
+    };
+    auto shipsAtReplay = [&]() {
+        std::vector<Vessel> out;
+        const double t = nowUnix() - replayBackMin * 60.0;
+        HistSample st; std::vector<std::pair<float, float>> trail;
+        for (const auto& kv : shipHist.tracks) {
+            if (!TrackHistory::stateAt(kv.second, t, 600.0, st, &trail, 3600.0)) continue;
+            Vessel v;
+            v.mmsi = std::atoi(kv.first.c_str()); v.name = kv.second.label; v.shipType = kv.second.shipType;
+            v.lat = st.lat; v.lon = st.lon; v.cog = st.heading; v.sog = 1.0; v.hasPos = true; v.stamp = steadyNow; v.trail = trail;
+            out.push_back(std::move(v));
+        }
+        return out;
+    };
+
+    // ---- Spacecraft missions ------------------------------------------------------------------------------------
+    auto missionPasses = [&](const Mission& m) {
+        const MStatus st = m.status(nowUnix());
+        return missionFilter == 0 || (missionFilter == 1 && st == MStatus::Past) || (missionFilter == 2 && st == MStatus::Active) || (missionFilter == 3 && st == MStatus::Planned);
+    };
+    auto missionEndEff = [&](const Mission& m) { return m.end != 0 ? std::min(m.end, m.tEnd()) : m.tEnd(); };
+    // Marker/path visible at the current simulation time (selected missions always show).
+    auto missionShown = [&](int mi) -> bool {
+        const Mission& m = missions[mi];
+        const bool sel = m.frame == MFrame::Sun ? (missionBody[mi] >= 0 && selBody == missionBody[mi]) : selMission == mi;
+        if (sel) return true;
+        return opts.showMissions && missionPasses(m) && m.covers(simTime) && simTime <= missionEndEff(m);
+    };
+    auto currentMission = [&]() -> int {
+        if (mode == Mode::Solar && selBody >= BODY_MISSION0) return helioMissions[selBody - BODY_MISSION0];
+        if (mode == Mode::Globe && selMission >= 0) return selMission;
+        return -1;
+    };
+    // Position of a geocentric mission in render units. Earth-fixed paths turn with the Earth.
+    auto missionScenePos = [&](const Mission& m, double t) -> Vector3 {
+        Vec3d p = m.at(t);
+        if (m.frame == MFrame::EarthFixed) {
+            const double c = std::cos(earthRotationAngle), s = std::sin(earthRotationAngle);
+            p = { p.x * c - p.y * s, p.x * s + p.y * c, p.z };
+        }
+        return toRender(p);
+    };
+    auto selectMission = [&](int mi, bool jump) {
+        const Mission& m = missions[mi];
+        if (jump && !m.covers(simTime)) simTime = m.tStart() + 0.5 * (m.tEnd() - m.tStart());
+        if (m.frame == MFrame::Sun) {
+            if (mode != Mode::Solar) setMode(Mode::Solar);
+            selBody = missionBody[mi]; followBody = true;
+            const Vec3d p = m.at(simTime);
+            solarCam.goal = std::clamp(std::sqrt(p.x * p.x + p.y * p.y + p.z * p.z) * 0.25, 0.02, 40.0);
+        } else {
+            if (mode != Mode::Globe) setMode(Mode::Globe);
+            selMission = mi; selected = -1; follow = false;
+            double far = 0.0;
+            for (const auto& smp : m.s) far = std::max(far, std::sqrt(smp[0] * smp[0] + smp[1] * smp[1] + smp[2] * smp[2]));
+            distGoal = m.frame == MFrame::EarthFixed ? 22.0f : (float)std::clamp(far * kSceneUnitsPerKm * 2.4, 12.0, 1150.0);
+        }
+    };
+    auto replayMission = [&](int mi) {
+        const Mission& m = missions[mi];
+        simTime = std::max(m.launch, m.tStart());
+        timeScale = std::clamp((missionEndEff(m) - simTime) / 45.0, 1.0, 1.6e8);
+        paused = false;
+    };
 
     auto applyOrbitDrag = [&](float& y, float& p, float& yv, float& pv) {
         if (dragging) {
@@ -478,6 +738,154 @@ int main(int argc, char** argv) {
 
     };
 
+    // Developer aid: `--scenario <name>` drives the UI through a feature and saves screenshots, then exits.
+    auto runScenario = [&]() -> bool {
+        if (scenario.empty()) return false;
+        auto idx = [&](const char* key) { for (size_t i = 0; i < missions.size(); ++i) if (missions[i].key == key) return (int)i; return 0; };
+        struct Step { int frame; double sec; std::function<void()> fn; };
+        static std::vector<Step> steps;
+        static size_t next = 0;
+        static int last = 0, doneFrame = -1;
+        static double t0 = -1.0;
+        if (t0 < 0) t0 = GetTime();
+        auto at = [&](int f, std::function<void()> fn) { steps.push_back({ f, -1.0, std::move(fn) }); last = std::max(last, f); };
+        auto atT = [&](double sec, std::function<void()> fn) { steps.push_back({ 0, sec, std::move(fn) }); };
+        auto shot = [&](int f, const char* name) { at(f, [&, name]() { pendingShot = scenarioPrefix + name + ".png"; }); };
+        auto shotT = [&](double sec, const char* name) { atT(sec, [&, name]() { pendingShot = scenarioPrefix + name + ".png"; }); };
+        if (steps.empty()) {
+            if (scenario == "icons") {
+                at(5, [&]() { iconSheet = true; });
+                shot(30, "i1_sheet");
+                at(35, [&]() { iconSheet = false; opts.showHints = false; adsb.setEnabled(true); shipsOn = true; ais.setEnabled(true); setMode(Mode::Map); mapWidthPx = screenWidth * 70.0; mapCentreU = (-73.95 + 180.0) / 360.0;
+                                const double sn = std::sin(40.72 * DEG); mapCentreV = 0.5 - std::log((1 + sn) / (1 - sn)) / (4 * PI_D); });
+                shotT(25.0, "i2_map_nyc");
+                atT(25.5, [&]() { adsb.setEnabled(false); mapWidthPx = screenWidth * 60.0; mapCentreU = (24.94 + 180.0) / 360.0; const double sn = std::sin(60.12 * DEG); mapCentreV = 0.5 - std::log((1 + sn) / (1 - sn)) / (4 * PI_D); });
+                shotT(40.0, "i3_ships_helsinki");
+                atT(40.5, [&]() { shipsOn = false; ais.setEnabled(false); setMode(Mode::Globe); opts.satLEO = true;
+                                   for (size_t i = 0; i < entities.size(); ++i) if (entities[i].name.find("ISS (ZARYA)") != std::string::npos) { selected = (int)i; break; }
+                                   follow = true; distGoal = dist = 1.6f; });
+                shotT(44.0, "i4_globe");
+            }
+            if (scenario == "history") {
+                atT(0.3, [&]() { opts.showHints = false; setMode(Mode::Map); adsb.setEnabled(true); mapWidthPx = screenWidth * 14.0; mapCentreU = (-74.0 + 180.0) / 360.0;
+                                 const double sn = std::sin(40.7 * DEG); mapCentreV = 0.5 - std::log((1 + sn) / (1 - sn)) / (4 * PI_D); });
+                shotT(70.0, "x1_live");
+                atT(71.0, [&]() { replayOn = true; replayBackMin = 0.9f; });
+                shotT(74.0, "x2_replay");
+                atT(75.0, [&]() { replayPlay = true; });
+                shotT(79.0, "x3_replay_play");
+            }
+            if (scenario == "wind") {
+                at(5, [&]() { opts.showHints = false; setMode(Mode::Map); opts.windOn = true; mapWidthPx = screenWidth * 3.0; mapCentreU = (-60.0 + 180.0) / 360.0;
+                              const double sn = std::sin(40.0 * DEG); mapCentreV = 0.5 - std::log((1 + sn) / (1 - sn)) / (4 * PI_D); });
+                shotT(14.0, "w1_wind");
+            }
+            if (scenario == "sky2") {
+                at(5, [&]() { opts.showHints = false; station = { true, 40.7, -74.0 }; ++stationVer; setMode(Mode::Sky); simTime = utcToUnix(2026, 12, 20, 3, 0, 0); paused = true; skyAz = 3.14159f; skyEl = 0.9f; skyFov = 75.0f; });
+                shot(40, "e1_sky_deepsky");
+                at(45, [&]() { eclipsesOpen = true; });
+                shot(80, "e2_eclipses");
+            }
+            if (scenario == "smoke") {
+                at(5, [&]() {
+                    opts.showHints = false; opts.osNotify = false; opts.passAlerts = true; station = { true, 40.7, -74.0 }; ++stationVer;
+                    quakesOn = eventsOn = auroraOn = launchesOn = decayOn = true;
+                    hazards.setQuakes(true); hazards.setEvents(true); hazards.setAurora(true); launchFeed.setEnabled(true);
+                    setMode(Mode::Globe);
+                    for (size_t i = 0; i < entities.size(); ++i) if (entities[i].name.find("ISS (ZARYA)") != std::string::npos) { selected = (int)i; break; }
+                });
+                at(30, [&]() { const int before = selected >= 0 ? entities[selected].norad : -1; reloadCatalog(); TraceLog(LOG_INFO, "SMOKE reload: selected norad before=%d after=%d entities=%zu", before, selected >= 0 ? entities[selected].norad : -1, entities.size()); });
+                shot(60, "k1_globe");
+                at(70, [&]() { setMode(Mode::Map); });
+                shot(130, "k2_map");
+                at(140, [&]() { setMode(Mode::Sky); });
+                shot(170, "k3_sky");
+                at(180, [&]() { opts.missionTrails = 1; selectMission(idx("voyager2"), true); });
+                shot(260, "k4_solar_full");
+                at(270, [&]() { setMode(Mode::Galaxy); });
+                shot(300, "k5_galaxy");
+                at(310, [&]() { setMode(Mode::Globe); reloadCatalog(); selectMission(idx("artemis2"), true); });
+                shot(380, "k6_globe_mission");
+                at(390, [&]() { reloadCatalog(); toggleFavourite(0); toggleFavourite(0); setMode(Mode::Solar); selBody = -1; });
+                shot(430, "k7_solar_after");
+            }
+            if (scenario == "passes") {
+                at(5, [&]() {
+                    opts.showHints = false; station = { true, 40.7, -74.0 }; ++stationVer; opts.passHours = 2; opts.passAlerts = true; opts.osNotify = false;
+                    setMode(Mode::Sky); skyAz = 3.14159f; skyEl = 0.7f; skyFov = 110.0f;
+                });
+                shot(70, "d1_sky_planner");
+                at(75, [&]() { layersOpen = true; });
+                shot(110, "d2_sky_layers");
+                at(115, [&]() { layersOpen = false; exportPassCalendar(); });
+                shot(140, "d3_ics_banner");
+                at(145, [&]() { setMode(Mode::Globe); layersOpen = true; });
+                shot(190, "d4_globe_layers");
+                at(195, [&]() {
+                    layersOpen = false; opts.satCat[0] = false;
+                    for (size_t i = 0; i < entities.size(); ++i) if (entities[i].name.find("ISS (ZARYA)") != std::string::npos) { selected = (int)i; break; }
+                    follow = false; distGoal = dist = 14.0f;
+                });
+                shot(260, "d5_sat_panel_no_starlink");
+                at(265, [&]() { if (selected >= 0) toggleFavourite(selected); });
+                shot(300, "d6_favourite");
+            }
+            if (scenario == "hazards") {
+                atT(0.3, [&]() {
+                    opts.showHints = false; setMode(Mode::Globe); distGoal = dist = 20.0f; faceGlobeTowards(25.0, -105.0);
+                    quakesOn = eventsOn = auroraOn = launchesOn = true;
+                    hazards.setQuakes(true); hazards.setEvents(true); hazards.setAurora(true); launchFeed.setEnabled(true);
+                });
+                shotT(14.0, "h1_globe_all");
+                atT(14.5, [&]() {
+                    setMode(Mode::Map); mapWidthPx = screenWidth * 5.0; mapCentreU = (-100.0 + 180.0) / 360.0;
+                    const double sn = std::sin(36.0 * DEG); mapCentreV = 0.5 - std::log((1 + sn) / (1 - sn)) / (4 * PI_D);
+                });
+                shotT(24.0, "h2_map_usa");
+                atT(24.5, [&]() { mapWidthPx = screenWidth * 1.4; mapCentreU = 0.62; mapCentreV = 0.42; });
+                shotT(27.0, "h3_map_world");
+                atT(27.5, [&]() {
+                    setMode(Mode::Globe); quakesOn = eventsOn = false; hazards.setQuakes(false); hazards.setEvents(false); decayOn = true; distGoal = dist = 14.0f; faceGlobeTowards(60.0, 20.0);
+                });
+                shotT(29.5, "h4_aurora_decay");
+            }
+            if (scenario == "starship") {
+                at(5, [&]() { opts.showHints = false; opts.satLEO = opts.satMEO = opts.satGEO = opts.satHEO = false; setMode(Mode::Globe); selectMission(idx("starship"), false);
+                              simTime = missions[idx("starship")].launch + 1500.0; paused = true; distGoal = dist = 30.0f; faceGlobeTowards(0.0, -10.0); });
+                shot(200, "s1_coast");
+                at(205, [&]() { simTime = missions[idx("starship")].launch + 3000.0; faceGlobeTowards(-10.0, 50.0); });
+                shot(330, "s2_reentry");
+                at(335, [&]() { selectMission(idx("artemis1"), true); simTime = missions[idx("artemis1")].launch + 4.0 * 86400.0; });
+                shot(500, "s3_artemis1");
+                at(505, [&]() { selectMission(idx("jwst"), true); simTime = missions[idx("jwst")].launch + 20.0 * 86400.0; });
+                shot(660, "s4_jwst");
+            }
+            if (scenario == "missions") {
+                at(5, [&]() { opts.showHints = false; setMode(Mode::Solar); solarCam.goal = solarCam.dist = 420.0; showLabels = true; });
+                shot(40, "01_solar_overview");
+                at(45, [&]() { selectMission(idx("voyager1"), true); solarCam.goal = solarCam.dist = 300.0; });
+                shot(140, "02_voyager1");
+                at(145, [&]() { simTime = utcToUnix(2004, 7, 1, 12, 0, 0); selectMission(idx("cassini"), false); solarCam.goal = solarCam.dist = 0.4; paused = true; });
+                shot(330, "03_cassini_saturn");
+                at(335, [&]() { missionsOpen = true; });
+                shot(360, "04_mission_list");
+                at(365, [&]() { missionsOpen = false; simTime = nowUnix(); paused = false; selectMission(idx("europaclipper"), true); solarCam.goal = solarCam.dist = 6.0; });
+                shot(500, "05_europa_clipper_now");
+                at(505, [&]() { setMode(Mode::Globe); selectMission(idx("artemis2"), true); });
+                shot(580, "06_artemis2");
+                at(585, [&]() { selectMission(idx("apollo11"), true); });
+                shot(660, "07_apollo11");
+                at(665, [&]() { selectMission(idx("starship"), false); simTime = missions[idx("starship")].launch + 1500.0; paused = true; distGoal = dist = 24.0f; faceGlobeTowards(5.0, -20.0); });
+                shot(740, "08_starship");
+                at(745, [&]() { setMode(Mode::Solar); simTime = nowUnix(); paused = false; solarCam.goal = solarCam.dist = 6.0; selBody = -1; selMission = -1; });
+                shot(820, "09_solar_inner");
+            }
+        }
+        while (next < steps.size() && (steps[next].sec >= 0.0 ? GetTime() - t0 >= steps[next].sec : frame >= steps[next].frame)) { steps[next].fn(); ++next; }
+        if (next >= steps.size() && doneFrame < 0) doneFrame = frame;
+        return doneFrame >= 0 && frame > doneFrame + 8;
+    };
+
     auto runScriptedTour = [&]() -> bool {
         if (!shotPrefix.empty()) {
             const double tnow = GetTime();
@@ -577,8 +985,8 @@ int main(int argc, char** argv) {
         } else {
             if (IsKeyPressed(KEY_ESCAPE)) {
                 if (follow || followBody || followGal) follow = followBody = followGal = false;
-                else if (helpOpen || settingsOpen || layersOpen) { helpOpen = settingsOpen = layersOpen = false; }
-                else if (selected >= 0 || selBody >= 0 || selGal >= 0 || !selectedAc.empty() || selectedShip) { selected = selBody = selGal = -1; selectedAc.clear(); selectedShip = 0; }
+                else if (helpOpen || settingsOpen || layersOpen || missionsOpen || eclipsesOpen) { helpOpen = settingsOpen = layersOpen = missionsOpen = eclipsesOpen = false; }
+                else if (selected >= 0 || selBody >= 0 || selGal >= 0 || selMission >= 0 || !selectedAc.empty() || selectedShip) { selected = selBody = selGal = selMission = -1; selectedAc.clear(); selectedShip = 0; }
                 else return true;
             }
             if (IsKeyPressed(KEY_SLASH)) { searching = true; query.clear(); matches.clear(); while (GetCharPressed() > 0) {} }
@@ -614,6 +1022,16 @@ int main(int argc, char** argv) {
             if (IsKeyPressed(KEY_Z)) { opts.windOn = !opts.windOn; if (opts.windOn && mode != Mode::Map) setMode(Mode::Map); }
             if (IsKeyPressed(KEY_X)) { wxProbe = !wxProbe; if (wxProbe && mode != Mode::Map) setMode(Mode::Map); }
             if (IsKeyPressed(KEY_U)) opts.units = (opts.units + 1) % 3;
+            auto needGlobeOrMap = [&]() { if (mode != Mode::Globe && mode != Mode::Map) setMode(Mode::Globe); };
+            if (IsKeyPressed(KEY_F3)) { quakesOn = !quakesOn; hazards.setQuakes(quakesOn); if (quakesOn) needGlobeOrMap(); }
+            if (IsKeyPressed(KEY_F4)) { eventsOn = !eventsOn; hazards.setEvents(eventsOn); if (eventsOn) needGlobeOrMap(); }
+            if (IsKeyPressed(KEY_F5)) { auroraOn = !auroraOn; hazards.setAurora(auroraOn); if (auroraOn) needGlobeOrMap(); }
+            if (IsKeyPressed(KEY_F6)) { launchesOn = !launchesOn; launchFeed.setEnabled(launchesOn); if (launchesOn) needGlobeOrMap(); }
+            if (IsKeyPressed(KEY_F7)) { decayOn = !decayOn; if (decayOn) needGlobeOrMap(); }
+            if (IsKeyPressed(KEY_V)) { missionsOpen = !missionsOpen; if (missionsOpen) layersOpen = settingsOpen = eclipsesOpen = false; }
+            if (IsKeyPressed(KEY_F9)) { eclipsesOpen = !eclipsesOpen; if (eclipsesOpen) layersOpen = settingsOpen = missionsOpen = false; }
+            if (IsKeyPressed(KEY_F8)) { opts.passAlerts = !opts.passAlerts; pushBanner(opts.passAlerts ? (station.set ? "Pass alerts on" : "Pass alerts on - right-click to set your ground station") : "Pass alerts off", { 90, 200, 120, 255 }); }
+            if (IsKeyPressed(KEY_BACKSLASH) && satMode && selected >= 0) toggleFavourite(selected);
             if (IsKeyPressed(KEY_F1)) helpOpen = !helpOpen;
             if (IsKeyPressed(KEY_F2)) { settingsOpen = !settingsOpen; layersOpen = false; }
             if (IsKeyPressed(KEY_F)) {
@@ -633,7 +1051,7 @@ int main(int argc, char** argv) {
             }
             if (IsKeyPressed(KEY_R)) {
                 yaw = 0.8f; pitch = 0.45f; distGoal = 22.0f; selected = -1; follow = false; yawV = pitchV = 0;
-                solarCam.goal = 11.0; solarCam.pitch = 0.55f; followBody = false; selBody = -1;
+                solarCam.goal = 11.0; solarCam.pitch = 0.55f; followBody = false; selBody = -1; selMission = -1;
                 galCam.goal = 32000.0; galCam.tgoal = { 0, 0, 0 }; galCam.pitch = 0.95f; followGal = false; selGal = -1;
                 if (mode == Mode::Map) { mapWidthPx = screenWidth; mapCentreU = 0.5; mapCentreV = 0.42; }
             }
@@ -806,9 +1224,10 @@ int main(int argc, char** argv) {
             }
         } else if (mode == Mode::Solar) {
             const double T = (simTime / 86400.0 - 10957.5) / 36525.0;
-            for (int i = 0; i < NPLANETS; ++i) bodyPos[i] = planetPos(i, T);
+            for (int i = 0; i < NPLANETS; ++i) { bodyPos[i] = planetPos(i, T); Vec3d precise; if (planetTracks.position(i, simTime, precise)) bodyPos[i] = precise; }
             bodyPos[BODY_HALLEY] = smallBodyPos(halleyBody, T);
             bodyPos[BODY_SUN] = { 0, 0, 0 };
+            for (size_t k = 0; k < helioMissions.size(); ++k) bodyPos[BODY_MISSION0 + k] = missions[helioMissions[k]].at(simTime);
             Vector3 goal{ 0, 0, 0 };
             if (selBody >= 0 && followBody) goal = { (float)bodyPos[selBody].x, (float)bodyPos[selBody].z, (float)-bodyPos[selBody].y };
             {
@@ -905,8 +1324,9 @@ int main(int argc, char** argv) {
             wx.setRequest(wr);
 
             float bestAc = 13.0f * 13.0f, bestShip = 13.0f * 13.0f;
-            if (adsb.enabled()) {
-                if (adsb.version() != acVer) { aircraftList = adsb.snapshot(); acVer = adsb.version(); }
+            if (adsb.enabled() || replayOn) {
+                if (replayOn) aircraftList = aircraftAtReplay();
+                else if (adsb.version() != acVer) { aircraftList = adsb.snapshot(); acVer = adsb.version(); }
                 aircraftScreen.resize(aircraftList.size()); aircraftLatLon.resize(aircraftList.size());
                 for (size_t i = 0; i < aircraftList.size(); ++i) {
                     const Aircraft& a = aircraftList[i];
@@ -925,8 +1345,9 @@ int main(int argc, char** argv) {
                     }
                 }
             }
-            if (shipsOn) {
-                if (ais.version() != shipVer) { ships = ais.snapshot(); shipVer = ais.version(); }
+            if (shipsOn || replayOn) {
+                if (replayOn) ships = shipsAtReplay();
+                else if (ais.version() != shipVer) { ships = ais.snapshot(); shipVer = ais.version(); }
                 shipScreen.resize(ships.size()); shipLatLon.resize(ships.size());
                 for (size_t i = 0; i < ships.size(); ++i) {
                     const Vessel& v = ships[i];
@@ -958,6 +1379,19 @@ int main(int argc, char** argv) {
     };
 
     auto pickSolarAndGalaxyObjects = [&]() {
+        hovMission = -1;
+        if (mode == Mode::Globe && pickOk && hovered < 0) {
+            float best = 14.0f * 14.0f;
+            for (int mi : earthMissions) {
+                const Mission& m = missions[mi];
+                if (!missionShown(mi) || !m.covers(simTime)) continue;
+                const Vector3 p = missionScenePos(m, simTime);
+                if (Vector3DotProduct(Vector3Subtract(p, cam.position), fwd) <= 0.0f || occludedByBody(cam.position, p, earthR)) continue;
+                const Vector2 s = projectToScreen(p);
+                const float dx = s.x - mouse.x, dy = s.y - mouse.y, d2 = dx * dx + dy * dy;
+                if (d2 < best) { best = d2; hovMission = mi; }
+            }
+        }
         bodyScr.clear();
         if (mode == Mode::Solar) {
             bodyScr.resize(bodyPos.size());
@@ -965,6 +1399,7 @@ int main(int argc, char** argv) {
             for (size_t i = 0; i < bodyPos.size(); ++i) {
                 float w; bodyScr[i] = projectToScreen(solarRelativePosition(bodyPos[i]), &w);
                 if (w <= 0 || !pickOk) continue;
+                if ((int)i >= BODY_MISSION0 && !missionShown(helioMissions[i - BODY_MISSION0])) continue;
                 const float dx = bodyScr[i].x - mouse.x, dy = bodyScr[i].y - mouse.y, d2 = dx * dx + dy * dy;
                 if (d2 < best) { best = d2; hovBody = (int)i; }
             }
@@ -988,7 +1423,8 @@ int main(int argc, char** argv) {
     auto handleClicks = [&]() {
         if (!searching && !ui.pressedOnUi && IsMouseButtonReleased(MOUSE_BUTTON_LEFT) && dragDist < 5.0f) {
             if (satMode) {
-                selected = hovered;
+                if (mode == Mode::Globe && hovMission >= 0 && hovered < 0) { selMission = hovMission; selected = -1; }
+                else { selected = hovered; selMission = -1; }
                 selectedAc = (mode == Mode::Map && hoveredAc >= 0) ? aircraftList[hoveredAc].hex : std::string();
                 selectedShip = (mode == Mode::Map && hoveredShip >= 0) ? ships[hoveredShip].mmsi : 0;
             }
@@ -1016,9 +1452,10 @@ int main(int argc, char** argv) {
     };
 
     auto updatePassPredictions = [&]() {
-        if (selected >= 0 && station.set && (passSel != selected || passVer != stationVer || std::fabs(simTime - passT) > 1800.0)) {
-            passes = computePasses(entities[selected], station, simTime, earth.radiusKm);
-            passSel = selected; passVer = stationVer; passT = simTime;
+        const int cfg = opts.passHours * 10 + opts.passMinEl;
+        if (selected >= 0 && station.set && (passSel != selected || passVer != stationVer || passCfg != cfg || std::fabs(simTime - passT) > 1800.0)) {
+            passes = computePasses(entities[selected], station, simTime, earth.radiusKm, kPassHours[opts.passHours], 8, kMinElDeg[opts.passMinEl] * DEG);
+            passSel = selected; passVer = stationVer; passT = simTime; passCfg = cfg;
         }
 
     };
@@ -1046,22 +1483,31 @@ int main(int argc, char** argv) {
             if (showTrack) drawGroundTrack(e, simTime, earth.radiusKm, { 255, 220, 90, 255 });
             DrawLine3D(e.pos, Vector3Scale(Vector3Normalize(e.pos), earthR), Fade(WHITE, 0.5f));
         }
-        const float base = std::max(0.001f, dist * 0.0045f) * opts.markerScale;
-        for (size_t i = 0; i < entities.size(); ++i) {
-            const Entity& e = entities[i];
-            if (!vis[i] && (int)i != selected) continue;
-            if (e.dot && (int)i != selected && (int)i != hovered) continue;
-            float f = e.kind == Kind::Ship ? 1.5f : e.kind == Kind::Station ? 1.3f : e.kind == Kind::Constellation ? 0.55f : 1.0f;
-            if ((int)i == selected || (int)i == hovered) f *= 1.6f;
-            float s = base * f;
-            if (e.kind == Kind::Ship) DrawSphere(e.pos, s * 0.6f, e.color);
-            else DrawCube(e.pos, s, s, s, e.color);
-        }
         if (station.set) {
             const Vector3 gp = toRender(stationEci(station, earthRotationAngle, earth.radiusKm * 1.002));
             DrawSphere(gp, std::max(0.004f, dist * 0.0028f), { 90, 255, 140, 255 });
             if (selected >= 0 && lookAngles(station, Vec3d{ entities[selected].pos.x / kSceneUnitsPerKm, -entities[selected].pos.z / kSceneUnitsPerKm, entities[selected].pos.y / kSceneUnitsPerKm }, earthRotationAngle, earth.radiusKm).el > 0.0)
                 DrawLine3D(gp, entities[selected].pos, { 90, 255, 140, 255 });
+        }
+        for (int mi : earthMissions) {
+            if (!missionShown(mi)) continue;
+            const Mission& m = missions[mi];
+            const bool sel = selMission == mi, hov = hovMission == mi;
+            const bool have = m.covers(simTime);
+            const double upTo = std::min(simTime, missionEndEff(m));
+            const Vector3 nowP = have ? missionScenePos(m, upTo) : Vector3{};
+            Vector3 prev = missionScenePos(m, m.t[0]);
+            bool passed = false;
+            for (size_t i = 1; i < m.t.size(); ++i) {
+                const Vector3 cur = missionScenePos(m, m.t[i]);
+                if (!passed && m.t[i] > upTo) {
+                    if (have) { DrawLine3D(prev, nowP, Fade(m.color, 1.0f)); prev = nowP; }
+                    passed = true;
+                }
+                if (!passed) DrawLine3D(prev, cur, Fade(m.color, sel || hov ? 1.0f : 0.8f));
+                else if ((i & 1) == 0) DrawLine3D(prev, cur, Fade(m.color, 0.38f));
+                prev = cur;
+            }
         }
         BeginBlendMode(BLEND_ADDITIVE);
         DrawModel(atmoModel, { 0, 0, 0 }, 1.0f, WHITE);
@@ -1194,18 +1640,54 @@ int main(int argc, char** argv) {
         }
 
         if (opts.windOn) {
-            for (const WeatherPoint& wp : wx.grid()) {
+            const std::vector<WeatherPoint> grid = wx.grid();
+            for (const WeatherPoint& wp : grid) {
                 const Vector2 c = latLonToScreen(wp.lat, wp.lon);
                 if (c.x < -40 || c.x > screenWidth + 40 || c.y < -40 || c.y > screenHeight + 40) continue;
                 const float to = (float)((wp.windDir + 180.0) * DEG), kt = (float)wp.windKt;
                 const Vector2 dir{ std::sin(to), -std::cos(to) }, perp{ -dir.y, dir.x };
                 const float len = 14.0f + std::min(kt, 55.0f) * 0.85f;
-                const Color col = kt < 10 ? Color{ 130, 200, 255, 255 } : kt < 20 ? Color{ 90, 235, 190, 255 } : kt < 30 ? Color{ 235, 235, 90, 255 } : kt < 40 ? Color{ 255, 170, 60, 255 } : Color{ 255, 85, 85, 255 };
+                const Color col = Fade(kt < 10 ? Color{ 130, 200, 255, 255 } : kt < 20 ? Color{ 90, 235, 190, 255 } : kt < 30 ? Color{ 235, 235, 90, 255 } : kt < 40 ? Color{ 255, 170, 60, 255 } : Color{ 255, 85, 85, 255 }, 0.55f);
                 const Vector2 a{ c.x - dir.x * len * 0.5f, c.y - dir.y * len * 0.5f }, b{ c.x + dir.x * len * 0.5f, c.y + dir.y * len * 0.5f };
-                DrawLineEx({ a.x + 1, a.y + 1 }, { b.x + 1, b.y + 1 }, 3.2f, Fade(BLACK, 0.5f));
+                DrawLineEx({ a.x + 1, a.y + 1 }, { b.x + 1, b.y + 1 }, 3.2f, Fade(BLACK, 0.3f));
                 DrawLineEx(a, b, 2.4f, col);
                 DrawTriangle(b, { b.x - dir.x * 8 - perp.x * 4.5f, b.y - dir.y * 8 - perp.y * 4.5f }, { b.x - dir.x * 8 + perp.x * 4.5f, b.y - dir.y * 8 + perp.y * 4.5f }, col);
-                UiText(TextFormat("%.0f kt", kt), (int)c.x - 14, (int)c.y + 8, 11, Fade(WHITE, 0.85f));
+                UiText(TextFormat("%.0f kt", kt), (int)c.x - 14, (int)c.y + 8, 11, Fade(WHITE, 0.6f));
+            }
+            // Flow animation: particles drift through the wind field interpolated (inverse-distance) from the grid.
+            if (grid.size() >= 4) {
+                struct Particle { Vector2 pos{}, trail[7]{}; float age = 0, life = 0, acc = 0; };
+                static std::vector<Particle> particles(1500);
+                auto windAt = [&](double lat, double lon, float& u, float& v, float& speed) {
+                    double sw = 0, su = 0, sv = 0;
+                    for (const WeatherPoint& wp : grid) {
+                        double dl = wp.lon - lon; dl -= 360.0 * std::floor((dl + 180.0) / 360.0);
+                        const double dx = dl * std::cos(lat * DEG), dy = wp.lat - lat, w = 1.0 / (dx * dx + dy * dy + 0.05);
+                        const double to = (wp.windDir + 180.0) * DEG;
+                        sw += w; su += w * wp.windKt * std::sin(to); sv += w * wp.windKt * std::cos(to);
+                    }
+                    u = (float)(su / sw); v = (float)(sv / sw); speed = std::sqrt(u * u + v * v);
+                };
+                auto respawn = [&](Particle& q) {
+                    q.pos = { (float)GetRandomValue(0, (int)screenWidth), (float)GetRandomValue((int)toolbarHeight, (int)screenHeight) };
+                    for (Vector2& t : q.trail) t = q.pos;
+                    q.life = 1.2f + GetRandomValue(0, 280) / 100.0f; q.age = GetRandomValue(0, 100) / 100.0f * q.life;
+                };
+                static bool seeded = false;
+                if (!seeded) { for (Particle& q : particles) respawn(q); seeded = true; }
+                for (Particle& q : particles) {
+                    q.age += frameSeconds;
+                    if (q.age > q.life || q.pos.x < -5 || q.pos.x > screenWidth + 5 || q.pos.y < toolbarHeight - 5 || q.pos.y > screenHeight + 5) { respawn(q); q.age = 0; continue; }
+                    double la, lo; screenToLatLon(q.pos.x, q.pos.y, la, lo);
+                    float u, v, sp; windAt(la, lo, u, v, sp);
+                    q.acc += frameSeconds;
+                    if (q.acc >= 0.035f) { q.acc = 0.0f; for (int k = 6; k > 0; --k) q.trail[k] = q.trail[k - 1]; q.trail[0] = q.pos; }
+                    q.pos.x += u * 3.6f * std::min(frameSeconds, 0.05f);
+                    q.pos.y -= v * 3.6f * std::min(frameSeconds, 0.05f);
+                    const float life = std::min(1.0f, std::min(q.age / 0.4f, (q.life - q.age) / 0.6f));
+                    const Color c = sp < 10 ? Color{ 150, 215, 255, 255 } : sp < 20 ? Color{ 120, 245, 200, 255 } : sp < 30 ? Color{ 240, 240, 120, 255 } : sp < 40 ? Color{ 255, 180, 80, 255 } : Color{ 255, 110, 110, 255 };
+                    for (int k = 0; k < 6; ++k) DrawLineV(k == 0 ? q.pos : q.trail[k - 1], q.trail[k], Fade(c, life * 0.8f * (1.0f - k / 6.0f)));
+                }
             }
         }
 
@@ -1239,9 +1721,7 @@ int main(int argc, char** argv) {
         for (size_t i = 0; i < entities.size(); ++i) {
             const Entity& e = entities[i];
             if (!vis[i] || e.dot) continue;
-            const float sz = 3.0f * opts.markerScale;
-            DrawCircleGradient((int)screenPositions[i].x, (int)screenPositions[i].y, 11.0f * opts.markerScale, Fade(e.color, 0.28f), BLANK);
-            DrawRectangle((int)(screenPositions[i].x - sz), (int)(screenPositions[i].y - sz), (int)(sz * 2 + 1), (int)(sz * 2 + 1), e.color);
+            icons.drawOutlined(satelliteIcon(e.name, e.cat, e.kind == Kind::Ship), screenPositions[i], 19.0f * opts.markerScale, 0.0f, e.color);
         }
 
         std::unordered_set<long long> labelCells;
@@ -1266,7 +1746,7 @@ int main(int argc, char** argv) {
             }
         }
 
-        if (adsb.enabled()) {
+        if (adsb.enabled() || replayOn) {
             const float sz = (float)Clamp(4.8 + std::log2(std::max(1.0, zoomF)) * 0.45, 4.8, 10.5) * opts.markerScale;
             const bool trails = opts.acTrails && zoomF > 6.0;
             for (size_t i = 0; i < aircraftList.size(); ++i) {
@@ -1286,14 +1766,10 @@ int main(int argc, char** argv) {
                     if (std::fabs(p.x - prev.x) < screenWidth * 0.4f) DrawLineEx(prev, p, 1.6f, Fade(c, 0.7f));
                 }
                 const float s = sz * (sel || hov ? 1.5f : 1.0f);
-                const float trk = (float)(a.track * DEG);
-                const Vector2 dir{ std::sin(trk), -std::cos(trk) }, perp{ -dir.y, dir.x };
-                auto tri = [&](float k, Color col) {
-                    DrawTriangle({ p.x + dir.x * s * k, p.y + dir.y * s * k }, { p.x - dir.x * s * 0.7f * k - perp.x * s * 0.6f * k, p.y - dir.y * s * 0.7f * k - perp.y * s * 0.6f * k },
-                                 { p.x - dir.x * s * 0.7f * k + perp.x * s * 0.6f * k, p.y - dir.y * s * 0.7f * k + perp.y * s * 0.6f * k }, col);
-                };
-                if (a.ground) { DrawCircleV(p, s * 0.6f, Fade(BLACK, 0.5f)); DrawCircleV(p, s * 0.45f, c); }
-                else { tri(1.32f, Fade(BLACK, 0.55f)); tri(1.0f, c); }
+                float typeScale = 1.0f;
+                const Icon aircraftGlyph = aircraftIcon(a.type, &typeScale);
+                const float glyph = s * 3.0f * typeScale * (a.ground ? 0.75f : 1.0f);
+                icons.drawOutlined(aircraftGlyph, p, glyph, (float)a.track, a.ground ? Fade(c, 0.8f) : c);
                 if (sel) DrawCircleLines((int)p.x, (int)p.y, s + 6, WHITE);
                 if ((showLabels && zoomF > 14.0 && !a.call.empty() && labelFree(p.x, p.y)) || sel || hov)
                     UiText(a.call.empty() ? a.hex.c_str() : a.call.c_str(), (int)p.x + (int)s + 5, (int)p.y - 6, 12, sel || hov ? WHITE : Fade(c, 0.95f));
@@ -1326,21 +1802,8 @@ int main(int argc, char** argv) {
                 }
                 if (sel || hov) s *= 1.25f;
                 const bool moving = v.sog >= 0.5;
-                const float hd = (float)((v.heading < 360 ? v.heading : v.cog) * DEG);
-                const Vector2 dir{ std::sin(hd), -std::cos(hd) }, perp{ -dir.y, dir.x };
-                const float wf = (v.len > 0 && v.beam > 0) ? Clamp((float)v.beam / v.len * 2.4f, 0.32f, 0.9f) : 0.5f;
-                if (moving) {
-                    auto hull = [&](float k, Color col) {
-                        const Vector2 bow{ p.x + dir.x * s * 1.25f * k, p.y + dir.y * s * 1.25f * k };
-                        const Vector2 pl{ p.x - dir.x * s * 0.75f * k - perp.x * s * wf * k, p.y - dir.y * s * 0.75f * k - perp.y * s * wf * k };
-                        const Vector2 pr{ p.x - dir.x * s * 0.75f * k + perp.x * s * wf * k, p.y - dir.y * s * 0.75f * k + perp.y * s * wf * k };
-                        const Vector2 tail{ p.x - dir.x * s * 0.4f * k, p.y - dir.y * s * 0.4f * k };
-                        DrawTriangle(bow, pl, tail, col); DrawTriangle(bow, tail, pr, col);
-                    };
-                    hull(1.3f, Fade(BLACK, 0.55f)); hull(1.0f, c);
-                } else {
-                    DrawPoly(p, 4, s * 0.95f, 45.0f, Fade(BLACK, 0.55f)); DrawPoly(p, 4, s * 0.72f, 45.0f, c);
-                }
+                const float hd = (float)((v.heading < 360 ? v.heading : v.cog));
+                icons.drawOutlined(shipIcon(cat, v.shipType), p, s * 2.7f, hd, moving ? c : Fade(c, 0.7f));
                 if (sel) DrawCircleLines((int)p.x, (int)p.y, s + 7, WHITE);
                 if ((showLabels && zoomF > 22.0 && !v.name.empty() && labelFree(p.x, p.y)) || sel || hov)
                     UiText(v.name.empty() ? TextFormat("MMSI %d", v.mmsi) : v.name.c_str(), (int)p.x + (int)s + 6, (int)p.y - 6, 12, sel || hov ? WHITE : Fade(c, 0.95f));
@@ -1407,6 +1870,46 @@ int main(int argc, char** argv) {
             }
         }
 
+        for (size_t k = 0; k < helioMissions.size(); ++k) {
+            const int mi = helioMissions[k];
+            const Mission& m = missions[mi];
+            const int bi = BODY_MISSION0 + (int)k;
+            const bool sel = selBody == bi, hov = hovBody == bi;
+            if (!sel && !(opts.showMissions && missionPasses(m))) continue;
+            const double upTo = std::min(simTime, missionEndEff(m));
+            const bool have = m.covers(simTime);
+            if (!sel && opts.missionTrails == 2) continue;
+            Vector2 prev{}; float prevW = 0.0f;
+            bool havePrev = false, passed = false;
+            auto emit = [&](const Vec3d& p, double t, size_t idx) {
+                float w; const Vector2 sp = projectToScreen(solarRelativePosition(p), &w);
+                if (!passed && t > upTo) {
+                    passed = true;
+                    if (have && havePrev) {
+                        float w2; const Vector2 np = projectToScreen(solarRelativePosition(bodyPos[bi]), &w2);
+                        if (prevW > 0 && w2 > 0) DrawLineEx(prev, np, sel ? 2.4f : 1.5f, Fade(m.color, sel ? 1.0f : 0.8f));
+                        prev = np; prevW = w2;
+                    }
+                }
+                if (havePrev && w > 0 && prevW > 0 && std::fabs(sp.x - prev.x) < 6000.0f && std::fabs(sp.y - prev.y) < 6000.0f) {
+                    if (!passed) DrawLineEx(prev, sp, sel ? 2.4f : hov ? 2.0f : 1.5f, Fade(m.color, sel ? 1.0f : hov ? 0.95f : 0.8f));
+                    else if ((idx & 1) == 0) DrawLineV(prev, sp, Fade(m.color, sel ? 0.65f : 0.30f));
+                }
+                prev = sp; prevW = w; havePrev = true;
+            };
+            // Unless it is selected, a spacecraft only shows a short tail either side of its position, sized to the zoom level.
+            double tLo = m.tStart(), tHi = m.tEnd();
+            if (!sel && opts.missionTrails == 0) {
+                const double speedAuPerSec = std::max(1e-9, m.speedAt(std::clamp(simTime, m.tStart(), m.tEnd())));
+                const double half = std::clamp(0.22 * solarCam.dist / speedAuPerSec, 4.0 * 86400.0, 70.0 * 365.25 * 86400.0);
+                tLo = std::max(tLo, simTime - half); tHi = std::min(tHi, simTime + half);
+                if (tHi <= tLo) continue;
+            }
+            if (tLo > m.tStart()) emit(m.at(tLo), tLo, 0);
+            for (size_t i = 0; i < m.t.size(); ++i) if (m.t[i] > tLo && m.t[i] < tHi) emit({ m.s[i][0], m.s[i][1], m.s[i][2] }, m.t[i], i + 1);
+            if (tHi < m.tEnd()) emit(m.at(tHi), tHi, 0);
+        }
+
         {
             const Vector2 s = bodyScr[BODY_SUN];
             const float r = (float)std::max(4.0, SUN_RADIUS_KM / AU_KM * pxPerAU);
@@ -1432,6 +1935,256 @@ int main(int argc, char** argv) {
         }
         if (selBody == BODY_SUN || hovBody == BODY_SUN) DrawCircleLines((int)bodyScr[BODY_SUN].x, (int)bodyScr[BODY_SUN].y, 14.0f, selBody == BODY_SUN ? WHITE : GRAY);
         UiText("Sun", (int)bodyScr[BODY_SUN].x + 12, (int)bodyScr[BODY_SUN].y - 20, 14, { 255, 230, 150, 255 });
+
+        for (size_t k = 0; k < helioMissions.size(); ++k) {
+            const int mi = helioMissions[k], bi = BODY_MISSION0 + (int)k;
+            if (!missionShown(mi)) continue;
+            const Mission& m = missions[mi];
+            const bool sel = selBody == bi, hov = hovBody == bi, ended = simTime > missionEndEff(m);
+            float w; const Vector2 s = projectToScreen(solarRelativePosition(bodyPos[bi]), &w);
+            if (w <= 0) continue;
+            const Color c = ended ? Fade(m.color, 0.45f) : m.color;
+            const float r = sel || hov ? 6.5f : 5.0f;
+            icons.drawOutlined(Icon::Probe, s, r * 3.4f, 0.0f, c);
+            if (sel || hov) DrawCircleLines((int)s.x, (int)s.y, r + 7.0f, sel ? WHITE : GRAY);
+            if (showLabels || sel || hov) UiText(m.name.c_str(), (int)s.x + (int)r + 6, (int)s.y - 7, 13, Fade(c, 0.95f));
+        }
+    };
+
+    // ---- Live hazard layers, launches and decay watch (Globe and Map views) ----------------------------------------
+    auto viewPoint = [&](double lat, double lon, Vector2& out) -> bool {
+        if (mode == Mode::Map) {
+            out = latLonToScreen(lat, lon);
+        } else {
+            const double la = lat * DEG, lo = lon * DEG;
+            const Vector3 dir{ (float)(std::cos(la) * std::cos(lo)), (float)std::sin(la), (float)(-std::cos(la) * std::sin(lo)) };
+            const Vector3 wp = Vector3Transform(Vector3Scale(dir, earthR * 1.002f), earthModel.transform);
+            if (Vector3DotProduct(wp, cam.position) < earthR * earthR) return false;  // far side of the globe
+            out = projectToScreen(wp);
+        }
+        return out.x > -20.0f && out.x < screenWidth + 20.0f && out.y > toolbarHeight - 8.0f && out.y < screenHeight + 20.0f;
+    };
+    auto focusLatLon = [&](double lat, double lon) {
+        if (mode == Mode::Map) {
+            mapCentreU = (lon + 180.0) / 360.0;
+            const double sn = std::sin(lat * DEG); mapCentreV = 0.5 - std::log((1 + sn) / (1 - sn)) / (4 * PI_D);
+            mapWidthPx = std::max(mapWidthPx, (double)screenWidth * 24.0);
+        } else { faceGlobeTowards(lat, lon); distGoal = std::min(distGoal, earthR + 6.0f); }
+    };
+    auto countdown = [&](double t) -> std::string {
+        const double d = t - nowUnix();
+        if (d <= 0) return d > -7200 ? "now" : "launched";
+        const long long s = (long long)d;
+        if (s >= 86400) return TextFormat("T-%lldd %02lldh", s / 86400, (s % 86400) / 3600);
+        return TextFormat("T-%02lld:%02lld:%02lld", s / 3600, (s % 3600) / 60, s % 60);
+    };
+    auto refreshHazardData = [&]() {
+        if (hazards.version() != hazardVer) {
+            hazardVer = hazards.version();
+            quakeList = hazards.quakes(); eventList = hazards.events(); auroraList = hazards.aurora(); spaceWx = hazards.weather();
+        }
+        if (launchFeed.version() != launchVer) { launchVer = launchFeed.version(); launchList = launchFeed.launches(); }
+    };
+
+    auto drawHazardOverlays = [&]() {
+        if (mode != Mode::Globe && mode != Mode::Map) return;
+        refreshHazardData();
+        hazardTip.clear();
+        float bestD = 11.0f * 11.0f;
+        auto consider = [&](const Vector2& s, const std::string& tip) {
+            const float dx = s.x - mouse.x, dy = s.y - mouse.y, d2 = dx * dx + dy * dy;
+            if (d2 < bestD && !ui.overUi) { bestD = d2; hazardTip = tip; }
+        };
+        const double nowT = nowUnix();
+        if (auroraOn && !auroraList.empty()) {
+            BeginBlendMode(BLEND_ADDITIVE);
+            // One OVATION grid cell is 1 degree: size the dots so neighbours blend into a continuous band at any zoom.
+            const float pxPerUnit = (float)(screenHeight * 0.5 / (std::max(0.5f, dist - earthR) * 0.414));
+            const float cell = mode == Mode::Map ? (float)(mapWidthPx / 360.0) + 1.0f : std::clamp(0.111f * pxPerUnit * 0.8f, 1.6f, 14.0f);
+            for (const AuroraPoint& a : auroraList) {
+                Vector2 s;
+                if (mode == Mode::Globe && a.p < 5) continue;
+                if (!viewPoint(a.lat, a.lon, s)) continue;
+                const float alpha = std::min(0.45f, a.p / 70.0f + 0.04f);
+                const Color c = a.p >= 30 ? Color{ 255, 120, 200, 255 } : a.p >= 12 ? Color{ 160, 255, 120, 255 } : Color{ 60, 235, 160, 255 };
+                if (mode == Mode::Map) DrawRectangleV({ s.x - cell * 0.5f, s.y - cell * 0.5f }, { cell, cell / std::max(0.3f, (float)std::cos(a.lat * DEG)) }, Fade(c, alpha));
+                else DrawCircleV(s, cell, Fade(c, alpha * 0.55f));
+            }
+            EndBlendMode();
+        }
+        if (eventsOn) {
+            for (const NaturalEvent& e : eventList) {
+                Vector2 s;
+                if (!viewPoint(e.lat, e.lon, s)) continue;
+                const float k = opts.markerScale;
+                std::string tip = e.title + (e.magnitude > 0 ? TextFormat("  (%.0f %s)", e.magnitude, e.unit.c_str()) : "");
+                if (e.category == "wildfires") {
+                    const float r = (2.2f + std::min(2.6f, (float)std::log10(std::max(10.0, e.magnitude)) * 0.6f)) * k;
+                    DrawCircleV(s, r + 1.5f, Fade(Color{ 255, 90, 20, 255 }, 0.30f));
+                    DrawCircleV(s, r, Color{ 255, 150, 40, 235 });
+                    tip = "Wildfire: " + tip;
+                } else if (e.category == "volcanoes") {
+                    DrawPoly(s, 3, 7.5f * k, -90.0f, Color{ 255, 70, 60, 255 });
+                    DrawPolyLinesEx(s, 3, 9.0f * k, -90.0f, 1.2f, Fade(BLACK, 0.7f));
+                    tip = "Volcano: " + tip;
+                } else if (e.category == "severeStorms") {
+                    DrawCircleLines((int)s.x, (int)s.y, 9.0f * k, Color{ 200, 140, 255, 255 });
+                    DrawCircleV(s, 3.0f * k, Color{ 200, 140, 255, 255 });
+                    tip = "Storm: " + tip;
+                } else if (e.category == "floods") {
+                    DrawRectangleV({ s.x - 4.0f * k, s.y - 4.0f * k }, { 8.0f * k, 8.0f * k }, Color{ 80, 160, 255, 235 });
+                    tip = "Flood: " + tip;
+                } else {
+                    DrawCircleV(s, 3.5f * k, Color{ 200, 200, 120, 220 });
+                }
+                if (e.time > 0) tip += "  ·  " + formatTime(e.time, "%Y-%m-%d");
+                consider(s, tip);
+            }
+        }
+        if (quakesOn) {
+            for (const Quake& q : quakeList) {
+                Vector2 s;
+                if (!viewPoint(q.lat, q.lon, s)) continue;
+                const float r = std::clamp(2.0f + (float)(q.mag - 2.5) * 2.6f, 3.0f, 20.0f) * opts.markerScale;
+                const Color c = q.depthKm < 35 ? Color{ 255, 80, 70, 255 } : q.depthKm < 100 ? Color{ 255, 170, 60, 255 } : q.depthKm < 300 ? Color{ 120, 230, 120, 255 } : Color{ 90, 160, 255, 255 };
+                const double age = (nowT - q.time) / 3600.0;
+                const float a = age < 1.0 ? 1.0f : age < 6.0 ? 0.85f : 0.65f;
+                DrawCircleV(s, r, Fade(c, 0.28f * a));
+                DrawCircleLines((int)s.x, (int)s.y, r, Fade(c, a));
+                DrawCircleV(s, 1.8f, Fade(c, a));
+                if (q.tsunami) DrawCircleLines((int)s.x, (int)s.y, r + 3.0f, Color{ 90, 220, 255, 255 });
+                consider(s, TextFormat("M%.1f  %s  ·  depth %.0f km  ·  %.0f h ago%s", q.mag, q.place.c_str(), q.depthKm, std::max(0.0, age), q.tsunami ? "  ·  tsunami alert" : ""));
+            }
+        }
+        if (launchesOn) {
+            std::vector<size_t> shownPad;
+            for (size_t i = 0; i < launchList.size(); ++i) {
+                const Launch& l = launchList[i];
+                if (!l.hasPad || l.net < nowT - 7200.0) continue;
+                bool dup = false;
+                for (size_t j : shownPad) if (std::fabs(launchList[j].lat - l.lat) < 0.05 && std::fabs(launchList[j].lon - l.lon) < 0.05) { dup = true; break; }
+                if (dup) continue;  // several launches from one pad: show the soonest
+                shownPad.push_back(i);
+                Vector2 s;
+                if (!viewPoint(l.lat, l.lon, s)) continue;
+                const double hours = (l.net - nowT) / 3600.0;
+                const Color c = hours < 24.0 ? Color{ 255, 220, 90, 255 } : hours < 72.0 ? Color{ 255, 160, 70, 255 } : Color{ 170, 182, 205, 255 };
+                if (hours < 24.0) DrawCircleLines((int)s.x, (int)s.y, 10.0f + 3.0f * std::sin((float)GetTime() * 3.0f), Fade(c, 0.6f));
+                icons.drawOutlined(Icon::Rocket, s, 20.0f * opts.markerScale, 0.0f, c);
+                std::string nm = l.name.substr(0, l.name.find(" | "));
+                std::string tip = l.name + "  ·  " + l.provider + "  ·  " + countdown(l.net) + "  ·  " + l.pad + ", " + l.location;
+                if (showLabels) UiText((nm + "  " + countdown(l.net)).c_str(), (int)s.x + 11, (int)s.y - 7, 12, Fade(c, 0.95f));
+                consider(s, tip);
+            }
+        }
+        if (decayOn) {
+            for (size_t i = 0; i < entities.size(); ++i) {
+                if (!vis[i]) continue;
+                const double perigee = entities[i].orbit.a * (1.0 - entities[i].orbit.e) - earth.radiusKm;
+                if (perigee > 260.0) continue;
+                DrawCircleLines((int)screenPositions[i].x, (int)screenPositions[i].y, 6.0f, Color{ 255, 90, 80, 230 });
+            }
+        }
+        if (!hazardTip.empty() && ui.tip.empty()) { ui.tip = hazardTip; ui.tipAt = mouse; }
+    };
+
+    // Left-hand cards: space weather, launches and decay watch.
+    auto drawLiveCards = [&]() {
+        if (mode != Mode::Globe && mode != Mode::Map) return;
+        refreshHazardData();
+        int y = readoutBottomY + 6;
+        const float cx = 12.0f, cw = 270.0f;
+        if (auroraOn) {
+            PanelData pd;
+            pd.title = "Space weather"; pd.tc = { 120, 240, 170, 255 }; pd.sub = "NOAA Space Weather Prediction Center";
+            if (spaceWx.kpOk) {
+                const Color kc = spaceWx.kp >= 5 ? Color{ 255, 110, 90, 255 } : spaceWx.kp >= 4 ? Color{ 255, 210, 90, 255 } : positiveColor;
+                pd.rows.push_back({ "Kp index", TextFormat("%.1f   %s", spaceWx.kp, geomagneticStorm(spaceWx.kp)), kc, false });
+            }
+            if (spaceWx.xrayOk) {
+                const std::string cl = xrayClass(spaceWx.xrayFlux);
+                const Color xc = cl[0] == 'X' ? Color{ 255, 90, 80, 255 } : cl[0] == 'M' ? Color{ 255, 160, 70, 255 } : cl[0] == 'C' ? Color{ 255, 220, 100, 255 } : positiveColor;
+                pd.rows.push_back({ "Solar X-rays", cl + "  (GOES)", xc, false });
+            }
+            if (spaceWx.auroraOk) pd.rows.push_back({ "Aurora", TextFormat("forecast for %s UTC", formatTime(spaceWx.auroraForecast, "%H:%M").c_str()), textColor, false });
+            if (pd.rows.empty()) pd.rows.push_back({ "Status", "loading...", mutedColor, false });
+            const int h = uiDrawPanel(pd, (int)cx, y, (int)cw);
+            ui.region({ cx, (float)y, cw, (float)h });
+            y += h + 8;
+        }
+        if (launchesOn) {
+            const double nowT = nowUnix();
+            std::vector<const Launch*> up;
+            for (const Launch& l : launchList) if (l.net >= nowT - 7200.0) up.push_back(&l);
+            const int rows = (int)std::min<size_t>(up.size(), 7);
+            const float h = 58.0f + std::max(1, rows) * 24.0f + 6.0f;
+            uiShadowBox({ cx, (float)y, cw, h });
+            ui.region({ cx, (float)y, cw, h });
+            DrawRectangle((int)cx + 1, y + 1, 4, 52, Fade(Color{ 255, 205, 90, 255 }, 0.9f));
+            UiText("Upcoming launches", (int)cx + 14, y + 8, 20, Color{ 255, 205, 90, 255 });
+            UiText("Launch Library 2  ·  click to centre on the pad", (int)cx + 14, y + 33, 12, mutedColor);
+            if (up.empty()) UiText(launchFeed.status().empty() ? "loading..." : launchFeed.status().c_str(), (int)cx + 14, y + 62, 13, mutedColor);
+            for (int i = 0; i < rows; ++i) {
+                const Launch& l = *up[i];
+                const float ry = y + 58.0f + i * 24.0f;
+                const Rectangle rr{ cx + 6, ry, cw - 12, 23 };
+                const bool hv = ui.hover(rr);
+                if (hv) DrawRectangleRounded(rr, 0.2f, 4, Fade(WHITE, 0.08f));
+                const double hours = (l.net - nowT) / 3600.0;
+                const Color c = hours < 24.0 ? Color{ 255, 220, 90, 255 } : hours < 72.0 ? Color{ 255, 170, 80, 255 } : Color{ 190, 200, 220, 255 };
+                UiText(countdown(l.net).c_str(), (int)cx + 14, (int)ry + 4, 12, c);
+                std::string nm = l.name.substr(0, l.name.find(" | ")) + "  " + (l.mission.empty() ? "" : l.mission);
+                if (nm.size() > 28) nm = nm.substr(0, 27) + "...";
+                UiText(nm.c_str(), (int)cx + 88, (int)ry + 4, 13, textColor);
+                if (hv) { ui.tip = l.name + "  ·  " + l.provider + "  ·  " + l.pad + ", " + l.location + "  ·  " + l.statusName; ui.tipAt = mouse; }
+                if (ui.clicked(rr) && l.hasPad) focusLatLon(l.lat, l.lon);
+            }
+            y += (int)h + 8;
+        }
+        if (decayOn && satMode) {
+            std::vector<std::pair<double, int>> low;
+            for (size_t i = 0; i < entities.size(); ++i) {
+                const double perigee = entities[i].orbit.a * (1.0 - entities[i].orbit.e) - earth.radiusKm;
+                if (perigee < 260.0 && perigee > 100.0) low.push_back({ perigee, (int)i });
+            }
+            std::sort(low.begin(), low.end());
+            const int rows = (int)std::min<size_t>(low.size(), 7);
+            const float h = 58.0f + std::max(1, rows) * 24.0f + 6.0f;
+            uiShadowBox({ cx, (float)y, cw, h });
+            ui.region({ cx, (float)y, cw, h });
+            DrawRectangle((int)cx + 1, y + 1, 4, 52, Fade(Color{ 255, 100, 90, 255 }, 0.9f));
+            UiText("Decay watch", (int)cx + 14, y + 8, 20, Color{ 255, 120, 110, 255 });
+            UiText(TextFormat("%zu objects with perigee under 260 km", low.size()), (int)cx + 14, y + 33, 12, mutedColor);
+            if (low.empty()) UiText("none in the loaded catalogue", (int)cx + 14, y + 62, 13, mutedColor);
+            for (int i = 0; i < rows; ++i) {
+                const Entity& e = entities[low[i].second];
+                const float ry = y + 58.0f + i * 24.0f;
+                const Rectangle rr{ cx + 6, ry, cw - 12, 23 };
+                if (ui.hover(rr)) DrawRectangleRounded(rr, 0.2f, 4, Fade(WHITE, 0.08f));
+                UiText(TextFormat("%.0f km", low[i].first), (int)cx + 14, (int)ry + 4, 12, Color{ 255, 140, 110, 255 });
+                std::string nm = e.name; if (nm.size() > 26) nm = nm.substr(0, 25) + "...";
+                UiText(nm.c_str(), (int)cx + 78, (int)ry + 4, 13, textColor);
+                if (ui.clicked(rr)) { if (mode != Mode::Globe) setMode(Mode::Globe); selected = low[i].second; selMission = -1; follow = true; distGoal = 0.6f; }
+            }
+            y += (int)h + 8;
+        }
+    };
+
+    auto drawMissionOverlay = [&]() {
+        if (mode != Mode::Globe) return;
+        for (int mi : earthMissions) {
+            if (!missionShown(mi)) continue;
+            const Mission& m = missions[mi];
+            if (!m.covers(simTime)) continue;
+            const Vector3 p = missionScenePos(m, std::min(simTime, missionEndEff(m)));
+            if (Vector3DotProduct(Vector3Subtract(p, cam.position), fwd) <= 0.0f || occludedByBody(cam.position, p, earthR)) continue;
+            const Vector2 s = projectToScreen(p);
+            const bool sel = selMission == mi, hov = hovMission == mi;
+            const Icon mi2 = m.key == "starship" ? Icon::Rocket : (m.key == "jwst" || m.key == "roman") ? Icon::SatTelescope : Icon::Capsule;
+            icons.drawOutlined(mi2, s, (sel || hov ? 30.0f : 22.0f) * opts.markerScale, 0.0f, m.color);
+            if (sel || hov) DrawCircleLines((int)s.x, (int)s.y, 19, sel ? WHITE : GRAY);
+            if (showLabels || sel || hov) UiText(m.name.c_str(), (int)s.x + 14, (int)s.y - 7, 14, Fade(m.color, 0.97f));
+        }
     };
 
     auto drawSkyScene = [&]() {
@@ -1525,6 +2278,28 @@ int main(int argc, char** argv) {
                 const int sz = st.pixelSize + (st.pixelSize > 1 ? 1 : 0);
                 if (sz <= 1) DrawPixelV(q, c); else DrawCircleV(q, sz * 0.7f, c);
             }
+            if (opts.showDeepSky) {
+                const float vis2 = starVis * opts.starBright;
+                const Color ink{ 255, 190, 120, 255 };
+                for (const DeepSkyObject& o : deepSky) {
+                    double e, n, u;
+                    toHorizontalFrame(precessToDate(o.direction), e, n, u);
+                    if (u < 0.0) continue;
+                    Vector2 q;
+                    if (!projectSkyDirection(e, n, u, q) || q.x < -20 || q.x > screenWidth + 20 || q.y < -20 || q.y > screenHeight + 20) continue;
+                    if (o.mag > 8.5 && skyFov > 70.0f) continue;  // keep a wide view uncluttered
+                    // apparent size in pixels from the angular size and the current field of view
+                    const float pxPerDeg = (float)(screenHeight / std::max(10.0f, skyFov));
+                    const float r = std::clamp((float)(o.sizeArcmin / 60.0) * pxPerDeg * 0.5f, 4.0f, 40.0f);
+                    const Color c = Fade(ink, 0.8f * vis2);
+                    if (o.type == "G") DrawEllipseLines((int)q.x, (int)q.y, r * 1.3f, r * 0.7f, c);
+                    else if (o.type == "GCl") { DrawCircleLines((int)q.x, (int)q.y, r, c); DrawLine((int)(q.x - r), (int)q.y, (int)(q.x + r), (int)q.y, c); DrawLine((int)q.x, (int)(q.y - r), (int)q.x, (int)(q.y + r), c); }
+                    else if (o.type == "OCl" || o.type == "*Ass") { for (int k = 0; k < 8; k += 2) DrawCircleSectorLines(q, r, k * 45.0f, k * 45.0f + 30.0f, 4, c); }
+                    else if (o.type == "PN") { DrawCircleLines((int)q.x, (int)q.y, r * 0.7f, c); DrawCircleV(q, 1.5f, c); }
+                    else DrawRectangleLines((int)(q.x - r * 0.8f), (int)(q.y - r * 0.8f), (int)(r * 1.6f), (int)(r * 1.6f), c);
+                    if (showLabels && (o.mag <= 7.0 || skyFov < 60.0f)) UiText(o.label().c_str(), (int)(q.x + r + 5), (int)q.y - 6, 12, Fade(ink, 0.85f * vis2));
+                }
+            }
         }
 
         const Vec3d sunUnit = sunDirection;
@@ -1593,8 +2368,7 @@ int main(int argc, char** argv) {
             const Entity& e = entities[i];
             if (!vis[i] || e.dot) continue;
             const Color c = skyLit[i] ? e.color : Fade(e.color, 0.3f);
-            DrawCircleGradient((int)screenPositions[i].x, (int)screenPositions[i].y, 14.0f * opts.markerScale, Fade(c, 0.30f), BLANK);
-            DrawRectangle((int)screenPositions[i].x - 3, (int)screenPositions[i].y - 3, 7, 7, c);
+            icons.drawOutlined(satelliteIcon(e.name, e.cat, e.kind == Kind::Ship), screenPositions[i], 22.0f * opts.markerScale, 0.0f, c);
         }
         if (!station.set)
             UiText("Showing the sky from 0°N 0°E.  Right-click the globe or map to set your own location.", (int)(screenWidth - UiMeasure("Showing the sky from 0°N 0°E.  Right-click the globe or map to set your own location.", 14)) / 2, 52, 14, { 255, 220, 120, 255 });
@@ -1733,6 +2507,13 @@ int main(int argc, char** argv) {
                     UiText("Moon", (int)mp.x + 12, (int)mp.y - 7, 14, { 200, 200, 200, 230 });
                 }
             }
+            for (size_t i = 0; i < entities.size(); ++i) {  // labelled objects, stations and crew vehicles as icons
+                if (!vis[i] || entities[i].dot) continue;
+                if (mode == Mode::Globe) icons.drawOutlined(satelliteIcon(entities[i].name, entities[i].cat, entities[i].kind == Kind::Ship), screenPositions[i], (i == (size_t)selected || (int)i == hovered ? 30.0f : 22.0f) * opts.markerScale, 0.0f, entities[i].color);
+            }
+            for (int idx : { hovered, selected }) {  // selected or hovered dots get an icon too
+                if (idx >= 0 && vis[idx] && entities[idx].dot) icons.drawOutlined(satelliteIcon(entities[idx].name, entities[idx].cat, false), screenPositions[idx], 24.0f * opts.markerScale, 0.0f, entities[idx].color);
+            }
             for (int idx : { hovered, selected }) {
                 if (idx < 0 || !vis[idx]) continue;
                 DrawCircleLines((int)screenPositions[idx].x, (int)screenPositions[idx].y, 11, idx == selected ? WHITE : GRAY);
@@ -1756,8 +2537,12 @@ int main(int argc, char** argv) {
         if (addLeftToolbarButton("Milky Way", mode == Mode::Galaxy, "The galaxy and nearby stars  (W)")) setMode(Mode::Galaxy);
         bx += 10.0f;
         layersX = bx;
-        if (addLeftToolbarButton("Layers", layersOpen, "Overlays, base map and filters")) { layersOpen = !layersOpen; if (layersOpen) settingsOpen = false; }
+        if (addLeftToolbarButton("Layers", layersOpen, "Overlays, base map and filters")) { layersOpen = !layersOpen; if (layersOpen) settingsOpen = missionsOpen = false; }
         if (addLeftToolbarButton("Labels", showLabels, "Labels  (L)")) showLabels = !showLabels;
+        missionsX = bx;
+        if (addLeftToolbarButton("Missions", missionsOpen, "Spacecraft missions: past, active and planned  (V)")) { missionsOpen = !missionsOpen; if (missionsOpen) layersOpen = settingsOpen = eclipsesOpen = false; }
+        eclipsesX = bx;
+        if (addLeftToolbarButton("Eclipses", eclipsesOpen, "Upcoming solar and lunar eclipses  (F9)")) { eclipsesOpen = !eclipsesOpen; if (eclipsesOpen) layersOpen = settingsOpen = missionsOpen = false; }
         if (satMode && showQuickToggles && addLeftToolbarButton("Track", showTrack, "Ground track of the selected satellite  (G)")) showTrack = !showTrack;
         if (mode == Mode::Map && showQuickToggles) {
             if (addLeftToolbarButton("Aircraft", adsb.enabled(), "Live ADS-B aircraft  (A)")) adsb.setEnabled(!adsb.enabled());
@@ -1766,7 +2551,7 @@ int main(int argc, char** argv) {
         }
         rx = screenWidth - 8.0f;
         if (addRightToolbarButton("Help", helpOpen, "Keyboard shortcuts  (F1)")) helpOpen = !helpOpen;
-        if (addRightToolbarButton("Settings", settingsOpen, "Options  (F2)")) { settingsOpen = !settingsOpen; if (settingsOpen) layersOpen = false; }
+        if (addRightToolbarButton("Settings", settingsOpen, "Options  (F2)")) { settingsOpen = !settingsOpen; if (settingsOpen) layersOpen = missionsOpen = false; }
         if (addRightToolbarButton("Search", searching, "Search  (/)")) { searching = !searching; query.clear(); matches.clear(); }
         rx -= 10.0f;
         if (addRightToolbarButton("Now", false, "Jump to real time  (N)")) { simTime = nowUnix(); timeScale = 1.0; }
@@ -1808,12 +2593,13 @@ int main(int argc, char** argv) {
 
     auto drawLayersPopup = [&]() {
         if (layersOpen) {
-            const float pw = 292.0f, lx = std::min(layersX, screenWidth - pw - 8.0f), py = toolbarHeight + 6.0f;
-            const float ph = mode == Mode::Map ? 392.0f : mode == Mode::Globe ? 408.0f : mode == Mode::Sky ? 250.0f : 70.0f;
+            const bool wide = mode == Mode::Globe || mode == Mode::Sky;
+            const float pw = wide ? 592.0f : 292.0f, lx = std::min(layersX, screenWidth - pw - 8.0f), py = toolbarHeight + 6.0f;
+            const float ph = mode == Mode::Map ? 508.0f : wide ? 500.0f : mode == Mode::Solar ? 180.0f : 70.0f;
             uiShadowBox({ lx, py, pw, ph }, 0.92f);
             ui.region({ lx, py, pw, ph });
             float y = py + 10.0f;
-            const float tx = lx + 6.0f, tw = pw - 12.0f;
+            const float tx = lx + 6.0f, tw = wide ? 280.0f : pw - 12.0f;
             if (mode == Mode::Map) {
                 drawPopupSectionTitle(lx, y, "BASE MAP");
                 ui.stepper(tx, y, tw, "Style", { "Blue Marble", "OSM Dark", "OSM Standard", "NASA MODIS (daily)" }, opts.baseMap); y += 30;
@@ -1829,40 +2615,165 @@ int main(int argc, char** argv) {
                 ui.toggle(tx, y, tw, "Labels   [L]", showLabels); y += 24;
                 ui.toggle(tx, y, tw, "Ground track   [G]", showTrack); y += 24;
                 ui.toggle(tx, y, tw, "City names   [I]", opts.showCities); y += 24;
-                ui.toggle(tx, y, tw, "Trails behind aircraft and ships", opts.acTrails); y += 24;
-            } else if (mode == Mode::Globe) {
-                drawPopupSectionTitle(lx, y, "EARTH");
-                ui.toggle(tx, y, tw, "Clouds", opts.showClouds); y += 24;
-                ui.toggle(tx, y, tw, "Ocean sun-glint", opts.showSpecular); y += 24;
-                ui.toggle(tx, y, tw, "City lights at night", opts.showNightLights); y += 24;
-                ui.toggle(tx, y, tw, "Constellation lines   [Q]", opts.showConst); y += 24;
-                ui.toggle(tx, y, tw, "City names   [I]", opts.showCities); y += 24;
-                drawPopupSectionTitle(lx, y, "SATELLITES");
-                ui.toggle(tx, y, tw, "Labels   [L]", showLabels); y += 24;
-                ui.toggle(tx, y, tw, "Orbit lines of named objects   [O]", showOrbits); y += 24;
-                ui.toggle(tx, y, tw, "LEO mega-constellations   [C]", showConstellation); y += 24;
-                ui.toggle(tx, y, tw, "Ground track of selection   [G]", showTrack); y += 28;
-                drawPopupSectionTitle(lx, y, "ORBIT CLASSES");
-                ui.toggle(tx, y, tw, "Low Earth orbit (LEO)", opts.satLEO); y += 24;
-                ui.toggle(tx, y, tw, "Medium Earth orbit (navigation)", opts.satMEO); y += 24;
-                ui.toggle(tx, y, tw, "Geostationary (GEO)", opts.satGEO); y += 24;
-                ui.toggle(tx, y, tw, "Highly elliptical (HEO)", opts.satHEO); y += 24;
-            } else if (mode == Mode::Sky) {
-                drawPopupSectionTitle(lx, y, "SKY");
-                ui.toggle(tx, y, tw, "Labels   [L]", showLabels); y += 24;
-                ui.toggle(tx, y, tw, "Constellation lines and names   [Q]", opts.showConst); y += 24;
-                ui.toggle(tx, y, tw, "Only visible passes in the planner", skyVisOnly); y += 28;
-                drawPopupSectionTitle(lx, y, "SATELLITES BY ORBIT");
-                ui.toggle(tx, y, tw, "Low Earth orbit (LEO)", opts.satLEO); y += 24;
-                ui.toggle(tx, y, tw, "Medium Earth orbit (navigation)", opts.satMEO); y += 24;
-                ui.toggle(tx, y, tw, "Geostationary (GEO)", opts.satGEO); y += 24;
-                ui.toggle(tx, y, tw, "Highly elliptical (HEO)", opts.satHEO); y += 24;
+                ui.toggle(tx, y, tw, "Trails behind aircraft and ships", opts.acTrails); y += 28;
+                drawPopupSectionTitle(lx, y, "HAZARDS, SPACE WEATHER, LAUNCHES");
+                { bool v = quakesOn; if (ui.toggle(tx, y, tw, "Earthquakes  (USGS, M2.5+)   [F3]", v)) { quakesOn = v; hazards.setQuakes(v); } y += 24; }
+                { bool v = eventsOn; if (ui.toggle(tx, y, tw, "Wildfires, volcanoes, storms  (NASA)   [F4]", v)) { eventsOn = v; hazards.setEvents(v); } y += 24; }
+                { bool v = auroraOn; if (ui.toggle(tx, y, tw, "Aurora forecast + space weather   [F5]", v)) { auroraOn = v; hazards.setAurora(v); } y += 24; }
+                { bool v = launchesOn; if (ui.toggle(tx, y, tw, "Upcoming rocket launches   [F6]", v)) { launchesOn = v; launchFeed.setEnabled(v); } y += 24; }
+            } else if (mode == Mode::Globe || mode == Mode::Sky) {
+                const float cx2 = lx + 296.0f, tx2 = cx2 + 6.0f;
+                float y2 = py + 10.0f;
+                auto orbitClasses = [&](float x, float tx0, float& yy) {
+                    drawPopupSectionTitle(x, yy, mode == Mode::Sky ? "SATELLITES BY ORBIT" : "ORBIT CLASSES");
+                    ui.toggle(tx0, yy, tw, "Low Earth orbit (LEO)", opts.satLEO); yy += 24;
+                    ui.toggle(tx0, yy, tw, "Medium Earth orbit (navigation)", opts.satMEO); yy += 24;
+                    ui.toggle(tx0, yy, tw, "Geostationary (GEO)", opts.satGEO); yy += 24;
+                    ui.toggle(tx0, yy, tw, "Highly elliptical (HEO)", opts.satHEO); yy += 28;
+                };
+                auto groups = [&](float x, float tx0, float& yy) {
+                    drawPopupSectionTitle(x, yy, "SATELLITE GROUPS");
+                    for (int g = 0; g < kSatCategories; ++g) { ui.toggle(tx0, yy, tw, satCategoryName(g), opts.satCat[g]); yy += 24; }
+                    yy += 4;
+                };
+                auto passSettings = [&](float x, float tx0, float& yy) {
+                    drawPopupSectionTitle(x, yy, "PASS PLANNER AND ALERTS");
+                    ui.stepper(tx0, yy, tw, "Planner window", { "24 hours", "3 days", "7 days" }, opts.passHours); yy += 28;
+                    ui.stepper(tx0, yy, tw, "Minimum elevation", { "0°", "10°", "20°", "30°" }, opts.passMinEl); yy += 28;
+                    ui.toggle(tx0, yy, tw, "Warn me before visible passes   [F8]", opts.passAlerts, "Watches the labelled satellites (ISS, Tiangong, Hubble) and your favourites"); yy += 24;
+                    ui.stepper(tx0, yy, tw, "Warn", { "5 min before", "10 min before", "30 min before" }, opts.alertLead); yy += 28;
+                    ui.toggle(tx0, yy, tw, "Also send a desktop notification", opts.osNotify); yy += 28;
+                    if (ui.button({ tx0 + 2, yy, 230, 24 }, "Save week of passes (.ics)", false, "Calendar file with the next 7 days of passes, with reminders")) exportPassCalendar();
+                    yy += 28;
+                };
+                if (mode == Mode::Globe) {
+                    drawPopupSectionTitle(lx, y, "EARTH");
+                    ui.toggle(tx, y, tw, "Clouds", opts.showClouds); y += 24;
+                    ui.toggle(tx, y, tw, "Ocean sun-glint", opts.showSpecular); y += 24;
+                    ui.toggle(tx, y, tw, "City lights at night", opts.showNightLights); y += 24;
+                    ui.toggle(tx, y, tw, "Constellation lines   [Q]", opts.showConst); y += 24;
+                    ui.toggle(tx, y, tw, "City names   [I]", opts.showCities); y += 28;
+                    drawPopupSectionTitle(lx, y, "SATELLITES");
+                    ui.toggle(tx, y, tw, "Labels   [L]", showLabels); y += 24;
+                    ui.toggle(tx, y, tw, "Orbit lines of named objects   [O]", showOrbits); y += 24;
+                    ui.toggle(tx, y, tw, "LEO mega-constellations   [C]", showConstellation); y += 24;
+                    ui.toggle(tx, y, tw, "Ground track of selection   [G]", showTrack); y += 28;
+                    drawPopupSectionTitle(lx, y, "LIVE LAYERS");
+                    { bool v = quakesOn; if (ui.toggle(tx, y, tw, "Earthquakes  (USGS, M2.5+)   [F3]", v)) { quakesOn = v; hazards.setQuakes(v); } y += 24; }
+                    { bool v = eventsOn; if (ui.toggle(tx, y, tw, "Wildfires, volcanoes, storms  (NASA)   [F4]", v)) { eventsOn = v; hazards.setEvents(v); } y += 24; }
+                    { bool v = auroraOn; if (ui.toggle(tx, y, tw, "Aurora forecast + space weather   [F5]", v)) { auroraOn = v; hazards.setAurora(v); } y += 24; }
+                    { bool v = launchesOn; if (ui.toggle(tx, y, tw, "Upcoming rocket launches   [F6]", v)) { launchesOn = v; launchFeed.setEnabled(v); } y += 24; }
+                    ui.toggle(tx, y, tw, "Decay watch (low perigee)   [F7]", decayOn); y += 28;
+                } else {
+                    drawPopupSectionTitle(lx, y, "SKY");
+                    ui.toggle(tx, y, tw, "Labels   [L]", showLabels); y += 24;
+                    ui.toggle(tx, y, tw, "Constellation lines and names   [Q]", opts.showConst); y += 24;
+                    ui.toggle(tx, y, tw, "Deep-sky objects (Messier)", opts.showDeepSky); y += 24;
+                    ui.toggle(tx, y, tw, "Only visible passes in the planner", skyVisOnly); y += 28;
+                    orbitClasses(lx, tx, y);
+                }
+                if (mode == Mode::Globe) orbitClasses(cx2, tx2, y2);
+                groups(cx2, tx2, y2);
+                passSettings(cx2, tx2, y2);
+            } else if (mode == Mode::Solar) {
+                drawPopupSectionTitle(lx, y, "DISPLAY");
+                ui.toggle(tx, y, tw, "Labels   [L]", showLabels); y += 28;
+                drawPopupSectionTitle(lx, y, "SPACECRAFT");
+                ui.toggle(tx, y, tw, "Show spacecraft and their paths", opts.showMissions); y += 24;
+                ui.stepper(tx, y, tw, "Paths", { "Tails", "Full", "Selected" }, opts.missionTrails); y += 28;
+                ui.stepper(tx, y, tw, "Show", { "All", "Completed", "Active", "Planned" }, missionFilter);
             } else {
                 drawPopupSectionTitle(lx, y, "DISPLAY");
                 ui.toggle(tx, y, tw, "Labels   [L]", showLabels);
             }
         }
 
+    };
+
+    auto drawMissionsPopup = [&]() {
+        if (!missionsOpen) return;
+        const double nowT = nowUnix();
+        std::vector<int> order;
+        int counts[4] = { 0, 0, 0, 0 };
+        for (size_t i = 0; i < missions.size(); ++i) {
+            const MStatus st = missions[i].status(nowT);
+            ++counts[0]; ++counts[st == MStatus::Past ? 1 : st == MStatus::Active ? 2 : 3];
+            if (missionPasses(missions[i])) order.push_back((int)i);
+        }
+        auto rank = [&](int i) { const MStatus st = missions[i].status(nowT); return st == MStatus::Planned ? 0 : st == MStatus::Active ? 1 : 2; };
+        std::stable_sort(order.begin(), order.end(), [&](int a, int b) { return rank(a) != rank(b) ? rank(a) < rank(b) : missions[a].launch > missions[b].launch; });
+        const float pw = 352.0f, lx = std::min(missionsX, screenWidth - pw - 8.0f), py = toolbarHeight + 6.0f, rowH = 23.0f, headH = 80.0f, footH = 30.0f;
+        const float ph = std::min(screenHeight - py - 34.0f, headH + (float)order.size() * rowH + footH);
+        const float listY = py + headH, listH = ph - headH - footH;
+        uiShadowBox({ lx, py, pw, ph }, 0.94f);
+        ui.region({ lx, py, pw, ph });
+        UiText("SPACECRAFT MISSIONS", (int)lx + 14, (int)py + 10, 13, { 150, 190, 255, 255 });
+        {
+            const std::string shown = TextFormat("%zu shown", order.size());
+            UiText(shown.c_str(), (int)(lx + pw - 14 - UiMeasure(shown.c_str(), 12)), (int)py + 11, 12, mutedColor);
+            const char* names[4] = { "All", "Completed", "Active", "Planned" };
+            float fx = lx + 10.0f;
+            for (int f = 0; f < 4; ++f) {
+                const std::string label = std::string(names[f]) + " " + std::to_string(counts[f]);
+                const float w = (float)UiMeasure(label.c_str(), 13) + 16.0f;
+                if (ui.button({ fx, py + 34.0f, w, 24 }, label.c_str(), missionFilter == f, nullptr, f == 3 ? Color{ 255, 205, 90, 255 } : Color{ 90, 160, 255, 255 })) { missionFilter = f; missionScroll = 0.0f; }
+                fx += w + 4.0f;
+            }
+        }
+        DrawLine((int)lx + 10, (int)(py + headH - 8), (int)(lx + pw - 10), (int)(py + headH - 8), Fade(WHITE, 0.09f));
+        const float contentH = (float)order.size() * rowH;
+        const bool overList = ui.hover({ lx, listY, pw, listH });
+        if (overList) missionScroll -= GetMouseWheelMove() * rowH * 2.0f;
+        missionScroll = std::clamp(missionScroll, 0.0f, std::max(0.0f, contentH - listH));
+        BeginScissorMode((int)lx, (int)listY, (int)pw, (int)listH);
+        for (size_t i = 0; i < order.size(); ++i) {
+            const float y = listY + (float)i * rowH - missionScroll;
+            if (y + rowH < listY || y > listY + listH) continue;
+            const Mission& m = missions[order[i]];
+            const MStatus st = m.status(nowT);
+            const Rectangle row{ lx + 6, y, pw - 12, rowH - 1 };
+            const bool h = overList && ui.hover(row);
+            const bool sel = (m.frame == MFrame::Sun ? selBody == missionBody[order[i]] : selMission == order[i]);
+            if (sel) DrawRectangleRounded(row, 0.2f, 4, Fade(m.color, 0.22f));
+            else if (h) DrawRectangleRounded(row, 0.2f, 4, Fade(WHITE, 0.08f));
+            DrawRectangle((int)lx + 14, (int)y + 7, 9, 9, m.color);
+            UiText(m.name.c_str(), (int)lx + 30, (int)y + 4, 14, sel ? WHITE : Color{ 222, 228, 240, 255 });
+            const std::string right = st == MStatus::Planned ? "planned" : st == MStatus::Active ? "since " + formatTime(m.launch, "%Y") : formatTime(m.launch, "%Y") + "-" + formatTime(m.end != 0 ? m.end : m.tEnd(), "%Y");
+            UiText(right.c_str(), (int)(lx + pw - 14 - UiMeasure(right.c_str(), 12)), (int)y + 5, 12, missionStatusColor(st));
+            if (h && ui.clicked(row)) selectMission(order[i], true);
+        }
+        EndScissorMode();
+        if (contentH > listH) {
+            const float trackH = listH - 8.0f, thumbH = std::max(24.0f, trackH * listH / contentH), thumbY = listY + 4.0f + (trackH - thumbH) * (missionScroll / (contentH - listH));
+            DrawRectangleRounded({ lx + pw - 7.0f, thumbY, 3.0f, thumbH }, 1.0f, 4, Fade(WHITE, 0.25f));
+        }
+        UiText("Click a mission to jump to it. Esc closes.", (int)lx + 14, (int)(py + ph - 22), 12, mutedColor);
+    };
+
+    auto drawEclipsesPopup = [&]() {
+        if (!eclipsesOpen) return;
+        if (std::fabs(simTime - eclipseFrom) > 45.0 * 86400.0) { eclipseList = findEclipses(simTime - 86400.0, 4.0, 12); eclipseFrom = simTime; }
+        const float pw = 372.0f, lx = std::min(eclipsesX, screenWidth - pw - 8.0f), py = toolbarHeight + 6.0f, rowH = 25.0f;
+        const float ph = 64.0f + std::max<size_t>(1, eclipseList.size()) * rowH + 52.0f;
+        uiShadowBox({ lx, py, pw, ph }, 0.94f);
+        ui.region({ lx, py, pw, ph });
+        UiText("ECLIPSES", (int)lx + 14, (int)py + 10, 13, { 150, 190, 255, 255 });
+        UiText("from the simulation time  ·  click to jump to the maximum", (int)lx + 14, (int)py + 31, 12, mutedColor);
+        for (size_t i = 0; i < eclipseList.size(); ++i) {
+            const Eclipse& e = eclipseList[i];
+            const Rectangle row{ lx + 6, py + 56.0f + (float)i * rowH, pw - 12, rowH - 1 };
+            const bool h = ui.hover(row);
+            if (h) DrawRectangleRounded(row, 0.2f, 4, Fade(WHITE, 0.08f));
+            if (ui.clicked(row)) { simTime = e.time - 600.0; paused = false; timeScale = 1.0; }
+            const Color c = e.solar ? Color{ 255, 214, 110, 255 } : Color{ 190, 205, 235, 255 };
+            DrawCircleV({ row.x + 12, row.y + 12 }, 6.0f, e.solar ? Color{ 40, 40, 50, 255 } : Color{ 205, 210, 225, 255 });
+            if (e.solar) DrawCircleLines((int)row.x + 12, (int)row.y + 12, 7.0f, c);
+            UiText(e.solar ? "Solar" : "Lunar", (int)row.x + 26, (int)row.y + 5, 13, c);
+            UiText(e.kind.c_str(), (int)row.x + 76, (int)row.y + 5, 13, e.kind == "Total" ? Color{ 255, 255, 255, 255 } : textColor);
+            UiText(formatTime(e.time, "%Y-%m-%d %H:%M UTC").c_str(), (int)(row.x + row.width - 8 - UiMeasure(formatTime(e.time, "%Y-%m-%d %H:%M UTC").c_str(), 13)), (int)row.y + 5, 13, textColor);
+        }
+        UiText("Predicted from the app's Sun and Moon model. Times are good to a few", (int)lx + 14, (int)(py + ph - 38), 11, mutedColor);
+        UiText("minutes; marginal eclipses may be classified differently.", (int)lx + 14, (int)(py + ph - 23), 11, mutedColor);
     };
 
     auto drawSettingsPopup = [&]() {
@@ -1903,17 +2814,18 @@ int main(int argc, char** argv) {
 
     auto drawHelpOverlay = [&]() {
         if (helpOpen) {
-            const float pw = 760.0f, ph = 430.0f, hx = (screenWidth - pw) * 0.5f, hyy = std::max(toolbarHeight + 12.0f, (screenHeight - ph) * 0.5f);
+            const float pw = 760.0f, ph = 500.0f, hx = (screenWidth - pw) * 0.5f, hyy = std::max(toolbarHeight + 12.0f, (screenHeight - ph) * 0.5f);
             uiShadowBox({ hx, hyy, pw, ph }, 0.95f);
             ui.region({ hx, hyy, pw, ph });
             UiText("Keyboard & mouse", (int)hx + 20, (int)hyy + 14, 20, WHITE);
             struct KV { const char* k; const char* v; };
             const KV col1[] = { { "VIEWS", "" }, { "E  M  S  P  W", "Earth / Map / Sky / Solar System / Milky Way" }, { "Tab", "next view" }, { "NAVIGATION", "" }, { "Drag", "rotate (3D)  /  pan (map)  /  look around (sky)" },
                                 { "Wheel", "zoom (to the cursor on the map)" }, { "Click", "select an object" }, { "Right-click", "place your ground station" }, { "/", "search (satellites, planets, stars)" },
+                                { "V  F9", "spacecraft missions / eclipses" }, { "\\", "favourite the selected satellite" },
                                 { "F", "follow / centre on the selection" }, { "H", "home: station on map, Sun in galaxy" }, { "R", "reset the view" }, { "Esc", "close panels, release, deselect, quit" } };
             const KV col2[] = { { "TIME", "" }, { "Space", "pause" }, { ", .  T  1  N", "slower / faster, reverse, real time, now" }, { "LAYERS", "" }, { "A", "live aircraft (ADS-B)" }, { "B", "ships (AIS)" },
                                 { "D  K  Z  X", "rain radar / clouds / wind / weather at centre" }, { "Y", "cycle base map" }, { "L  O  C  G", "labels / orbits / constellations / ground track" },
-                                { "U", "cycle units" }, { "J", "jump to a date and time" }, { "Q", "constellation lines" }, { "I", "city names" }, { "F1  F2  F12", "help / settings / screenshot" } };
+                                { "F3 - F7", "quakes, fires, aurora, launches, decay" }, { "F8", "pass alerts on / off" }, { "U", "cycle units" }, { "J", "jump to a date and time" }, { "Q", "constellation lines" }, { "I", "city names" }, { "F1  F2  F12", "help / settings / screenshot" } };
             auto column = [&](const KV* rows, int n, float x0) {
                 float y = hyy + 52.0f;
                 for (int i = 0; i < n; ++i) {
@@ -1976,6 +2888,20 @@ int main(int argc, char** argv) {
                 UiText(lab.c_str(), sx + (int)len - UiMeasure(lab.c_str(), 12), sy - 18, 12, WHITE);
             }
 
+            if ((adsb.enabled() || shipsOn || replayOn) && !(opts.radarOn && !radarFrames.empty() && false)) {
+                const float rw = 520.0f, rxx = (screenWidth - rw) * 0.5f, ryy = screenHeight - (opts.showStatus ? 22.0f : 0.0f) - 44.0f - ((opts.radarOn && !radarFrames.empty()) ? 42.0f : 0.0f);
+                uiShadowBox({ rxx, ryy, rw, 34 }, 0.85f);
+                ui.region({ rxx, ryy, rw, 34 });
+                if (ui.button({ rxx + 6, ryy + 5, 70, 24 }, "History", replayOn, "Replay recent aircraft and ship traffic (kept for 3 hours)")) { replayOn = !replayOn; replayPlay = false; if (replayOn && replayBackMin < 1.0f) replayBackMin = 30.0f; }
+                if (replayOn) {
+                    if (ui.button({ rxx + 80, ryy + 5, 52, 24 }, replayPlay ? "Pause" : "Play", replayPlay, "Play forward to the present")) replayPlay = !replayPlay;
+                    ui.slider(rxx + 136, ryy + 5, 270, "Back", replayBackMin, 0.0f, 180.0f, "%.0f min");
+                    UiText(formatTime(nowUnix() - replayBackMin * 60.0, "%H:%M UTC").c_str(), (int)(rxx + rw - 96), (int)ryy + 9, 13, Color{ 255, 220, 90, 255 });
+                } else {
+                    const double span = std::min(acHist.oldest(), shipHist.oldest());
+                    UiText(span < 1e17 ? TextFormat("%zu aircraft and %zu vessel positions recorded, back to %s UTC", acHist.sampleCount(), shipHist.sampleCount(), formatTime(span, "%H:%M").c_str()) : "recording aircraft and ship positions", (int)rxx + 86, (int)ryy + 9, 12, mutedColor);
+                }
+            }
             if (opts.radarOn && !radarFrames.empty()) {
                 const float rw = 330.0f, rxx = (screenWidth - rw) * 0.5f, ryy = screenHeight - (opts.showStatus ? 22.0f : 0.0f) - 44.0f;
                 uiShadowBox({ rxx, ryy, rw, 34 }, 0.85f);
@@ -1998,6 +2924,8 @@ int main(int argc, char** argv) {
             std::string st;
             auto add = [&](const std::string& t) { if (!t.empty()) { if (!st.empty()) st += "   ·   "; st += t; } };
             if (satMode) add(TextFormat("%zu satellites (SGP4: %zu)", entities.size(), (size_t)std::count_if(entities.begin(), entities.end(), [](const Entity& e) { return e.orbit.useSgp4; })));
+            if (satMode && newestEpoch > 0) add(TextFormat("orbital elements %s old", fmtDuration(nowUnix() - newestEpoch).c_str()));
+            if (opts.passAlerts && satMode) add(station.set ? "pass alerts on" : "pass alerts need a ground station");
             if (mode == Mode::Map) {
                 if (adsb.enabled()) add(adsb.status());
                 if (shipsOn) add(ais.status());
@@ -2007,9 +2935,13 @@ int main(int argc, char** argv) {
             }
             if (mode == Mode::Galaxy) add("HYG catalogue (17k stars) + procedural Milky Way model");
             if (mode == Mode::Sky) add(TextFormat("%s · %zu constellations · drag to look around, wheel to zoom", station.set ? "your station" : "default location", consLabels.size()));
+            if (mode == Mode::Map || mode == Mode::Globe) {
+                if (quakesOn || eventsOn || auroraOn) add(hazards.status());
+                if (launchesOn) add(launchFeed.status());
+            }
             { const std::string es = imagery.status(); if (!es.empty()) add(es); }
             { const std::string ts = tleUpdater.status(); if (!ts.empty()) add(ts); }
-            if (mode == Mode::Solar) add("JPL approximate ephemerides (1800-2050)");
+            if (mode == Mode::Solar) add("Planets: JPL approximate ephemerides (1800-2050)  ·  spacecraft: JPL Horizons trajectories");
             UiText(st.c_str(), 10, (int)screenHeight - 18, 12, { 170, 180, 198, 255 });
             if (mode == Mode::Map) {
                 double la, lo; screenToLatLon(mouse.x, mouse.y, la, lo);
@@ -2038,7 +2970,77 @@ int main(int argc, char** argv) {
             bool have = false;
             auto addRow = [&](const char* k, const std::string& v, Color c = { 235, 238, 245, 255 }) { pd.rows.push_back({ k, v, c, false }); };
             auto addSection = [&](const char* t) { pd.rows.push_back({ t, "", WHITE, true }); };
-            if (satMode && selected >= 0) {
+            auto addWide = [&](const std::string& t, Color c = { 200, 208, 225, 255 }) { pd.rows.push_back({ "", t, c, false, true }); };
+            const int cm = currentMission();
+            if (cm >= 0) {
+                const Mission& m = missions[cm];
+                const double nowT = nowUnix();
+                const MStatus st = m.status(nowT);
+                pd.title = m.name; pd.tc = m.color; pd.sub = m.agency;
+                addWide(m.kind, mutedColor);
+                addWide("Destination: " + m.target, mutedColor);
+                addSection("STATUS");
+                addRow("Status", missionStatusName(st), missionStatusColor(st));
+                addRow(m.launchKnown ? "Launch" : "Tracked from", fmtMissionDate(m.launch, false));
+                if (m.end != 0) addRow(st == MStatus::Past ? "Ended" : "Ends", fmtMissionDate(m.end, false));
+                addRow(simTime >= m.launch ? "Mission time" : "Launch in", fmtDuration(simTime - m.launch));
+                if (m.covers(simTime)) {
+                    addSection("AT THE SIMULATION TIME");
+                    const double speed = m.speedAt(simTime);
+                    auto speedText = [&](double kmPerSec) { return opts.units == 1 ? std::string(TextFormat("%.2f mi/s", kmPerSec * 0.621371)) : std::string(TextFormat("%.2f km/s", kmPerSec)); };
+                    if (m.frame == MFrame::Sun) {
+                        const Vec3d p = m.at(simTime), e0 = bodyPos[2];
+                        const double r = std::sqrt(p.x * p.x + p.y * p.y + p.z * p.z);
+                        const double de = std::sqrt((p.x - e0.x) * (p.x - e0.x) + (p.y - e0.y) * (p.y - e0.y) + (p.z - e0.z) * (p.z - e0.z));
+                        addRow("From Sun", TextFormat("%.2f AU", r));
+                        addRow("From Earth", TextFormat("%.2f AU", de));
+                        const double lt = de / LIGHT_AU_PER_MIN;
+                        addRow("Light time", lt >= 120.0 ? std::string(TextFormat("%.1f hours", lt / 60.0)) : std::string(TextFormat("%.1f min", lt)));
+                        addRow("Speed", speedText(speed * AU_KM));
+                    } else {
+                        const Vec3d p = m.at(simTime);
+                        const double r = std::sqrt(p.x * p.x + p.y * p.y + p.z * p.z);
+                        Vec3d eci = p;
+                        if (m.frame == MFrame::EarthFixed) { const double c = std::cos(earthRotationAngle), s = std::sin(earthRotationAngle); eci = { p.x * c - p.y * s, p.x * s + p.y * c, p.z }; }
+                        addRow(r - earth.radiusKm < 20000.0 ? "Altitude" : "From Earth", fmtDistKm(opts, r - earth.radiusKm));
+                        const double lat = std::atan2(eci.z, std::hypot(eci.x, eci.y)) / DEG;
+                        double lon = std::fmod((std::atan2(eci.y, eci.x) - earthRotationAngle) / DEG, 360.0);
+                        if (lon > 180.0) lon -= 360.0; else if (lon < -180.0) lon += 360.0;
+                        if (r < 20000.0) addRow("Lat / Lon", TextFormat("%.2f° %c   %.2f° %c", std::fabs(lat), lat >= 0 ? 'N' : 'S', std::fabs(lon), lon >= 0 ? 'E' : 'W'));
+                        const Vec3d mp = moonPos(daysSinceJ2000);
+                        if (m.frame == MFrame::EarthInertial && r > 30000.0) addRow("From Moon", fmtDistKm(opts, std::sqrt((eci.x - mp.x) * (eci.x - mp.x) + (eci.y - mp.y) * (eci.y - mp.y) + (eci.z - mp.z) * (eci.z - mp.z))));
+                        addRow(m.frame == MFrame::EarthFixed ? "Speed (vs Earth)" : "Speed", speedText(speed));
+                    }
+                } else {
+                    addWide(simTime < m.tStart() ? "Not yet launched at this time" : "Tracking data ends before this time", mutedColor);
+                }
+                addSection("ABOUT");
+                for (const std::string& line : wrapText(m.summary, 44)) addWide(line);
+                if (!m.events.empty()) {
+                    addSection("MILESTONES");
+                    size_t first = 0;
+                    while (first < m.events.size() && m.events[first].t < simTime - 1.0) ++first;
+                    const size_t shown = std::min<size_t>(m.events.size(), 7);
+                    size_t start = first >= 2 ? first - 2 : 0;
+                    if (start + shown > m.events.size()) start = m.events.size() - shown;
+                    for (size_t i = start; i < start + shown; ++i) {
+                        const MEvent& ev = m.events[i];
+                        const Color c = i < first ? Color{ 130, 140, 160, 255 } : i == first ? Color{ 255, 255, 255, 255 } : ev.approx ? Color{ 255, 215, 120, 255 } : textColor;
+                        const std::vector<std::string> lines = wrapText(fmtMissionDate(ev.t, ev.approx) + "  " + ev.label, 44);
+                        for (size_t l = 0; l < lines.size(); ++l) addWide(l ? "      " + lines[l] : lines[l], c);
+                    }
+                }
+                const int panelX = px - 32;
+                const int ph = uiDrawPanel(pd, panelX, py0, 320);
+                ui.region({ (float)panelX, (float)py0, 320.0f, (float)ph });
+                const float by = (float)(py0 + ph + 8);
+                int prevEv = -1, nextEv = -1;
+                for (size_t i = 0; i < m.events.size(); ++i) { if (m.events[i].t < simTime - 1.0) prevEv = (int)i; if (nextEv < 0 && m.events[i].t > simTime + 1.0) nextEv = (int)i; }
+                ui.region({ (float)panelX, by, 320.0f, 28.0f });
+                if (ui.button({ (float)panelX, by, 98, 26 }, "< Previous", false, "Jump to the previous milestone") && prevEv >= 0) simTime = m.events[prevEv].t;
+                if (ui.button({ (float)panelX + 104, by, 98, 26 }, "Replay", false, "Replay the whole mission from the start")) replayMission(cm);
+                if (ui.button({ (float)panelX + 208, by, 98, 26 }, "Next >", false, "Jump to the next milestone") && nextEv >= 0) simTime = m.events[nextEv].t;
+            } else if (satMode && selected >= 0) {
                 have = true;
                 const Entity& e = entities[selected];
                 const double r = e.altKm + earth.radiusKm;
@@ -2066,7 +3068,10 @@ int main(int argc, char** argv) {
                 if (e.norad) addRow("NORAD ID", TextFormat("%d", e.norad));
                 if (!e.intl.empty()) addRow("Int'l designator", TextFormat("%s  (launched %d)", e.intl.c_str(), e.launchYear));
                 if (e.rev) addRow("Orbit number", TextFormat("%d", e.rev));
-                addRow("Elements age", TextFormat("%.1f days", std::fabs(simTime - e.orbit.epoch) / 86400.0));
+                {
+                    const double ageDays = std::fabs(simTime - e.orbit.epoch) / 86400.0;
+                    addRow("Elements age", TextFormat("%.1f days%s", ageDays, ageDays > 30.0 ? "  (stale)" : ageDays > 7.0 ? "  (ageing)" : ""), ageDays > 30.0 ? Color{ 255, 110, 90, 255 } : ageDays > 7.0 ? Color{ 255, 200, 90, 255 } : textColor);
+                }
                 addRow("Propagator", e.orbit.useSgp4 ? "SGP4" : "Kepler + J2", e.orbit.useSgp4 ? positiveColor : Color{ 255, 200, 120, 255 });
                 if (e.bstar != 0.0) addRow("B* drag term", TextFormat("%.2e", e.bstar));
                 if (station.set) {
@@ -2177,7 +3182,13 @@ int main(int argc, char** argv) {
                     addRow("Temperature", TextFormat("~%.0f K", tK));
                 }
             }
-            if (have) uiDrawPanel(pd, px, py0, 288);
+            if (have) {
+                const int ph = uiDrawPanel(pd, px, py0, 288);
+                if (satMode && selected >= 0 && cm < 0 && entities[selected].norad) {
+                    const bool fav = favourites.count(entities[selected].norad) > 0;
+                    if (ui.button({ (float)px, (float)(py0 + ph + 8), 288.0f, 26.0f }, fav ? "Remove from favourites   [\\]" : "Add to favourites   [\\]", fav, "Favourites are always labelled and get pass alerts", { 255, 205, 90, 255 })) toggleFavourite(selected);
+                }
+            }
         }
 
     };
@@ -2197,39 +3208,44 @@ int main(int argc, char** argv) {
                 pd.rows.push_back({ "Humidity", TextFormat("%.0f %%", w.humidity), textColor, false });
                 pd.rows.push_back({ "Pressure", TextFormat("%.0f hPa", w.pressure), textColor, false });
             }
-            uiDrawPanel(pd, 12, readoutBottomY + 6, 270);
+            const int wh = uiDrawPanel(pd, 12, readoutBottomY + 6, 270);
+            readoutBottomY += wh + 8;
         }
 
     };
 
     auto drawSkyPassPlanner = [&]() {
         if (mode == Mode::Sky && station.set) {
-            if (skyPassVer != stationVer || std::fabs(simTime - skyPassT) > 1800.0) {
+            const int cfg = opts.passHours * 10 + opts.passMinEl;
+            if (skyPassVer != stationVer || skyPassCfg != cfg || std::fabs(simTime - skyPassT) > 1800.0) {
                 skyPasses.clear();
-                for (int ei : notable) for (const Pass& ps : computePasses(entities[ei], station, simTime, earth.radiusKm)) skyPasses.push_back({ ei, ps });
+                for (int ei : notable) for (const Pass& ps : computePasses(entities[ei], station, simTime, earth.radiusKm, kPassHours[opts.passHours], 10, kMinElDeg[opts.passMinEl] * DEG)) skyPasses.push_back({ ei, ps });
                 std::sort(skyPasses.begin(), skyPasses.end(), [](const SkyPass& a, const SkyPass& b) { return a.ps.aos < b.ps.aos; });
-                skyPassVer = stationVer; skyPassT = simTime;
+                skyPassVer = stationVer; skyPassT = simTime; skyPassCfg = cfg;
             }
             std::vector<const SkyPass*> list;
             for (const SkyPass& sp : skyPasses) if (!skyVisOnly || sp.ps.vis) list.push_back(&sp);
-            const int shown = (int)std::min<size_t>(list.size(), 9);
-            const float pw = 318.0f, pxx = 12.0f, pyy = (float)readoutBottomY + 8.0f, ph2 = 54.0f + std::max(1, shown) * 24.0f;
+            const int shown = (int)std::min<size_t>(list.size(), 10);
+            const float pw = 338.0f, pxx = 12.0f, pyy = (float)readoutBottomY + 8.0f, ph2 = 58.0f + std::max(1, shown) * 24.0f;
             uiShadowBox({ pxx, pyy, pw, ph2 }, 0.8f);
             ui.region({ pxx, pyy, pw, ph2 });
-            UiText("Next passes over your station", (int)pxx + 14, (int)pyy + 9, 15, WHITE);
-            UiText("UTC  ·  click to jump to the pass", (int)pxx + 14, (int)pyy + 29, 11, mutedColor);
-            if (list.empty()) UiText(skyVisOnly ? "no visible passes in the next 24 h" : "no passes in the next 24 h", (int)pxx + 14, (int)pyy + 54, 13, mutedColor);
+            UiText("Next passes", (int)pxx + 14, (int)pyy + 9, 15, WHITE);
+            UiText(TextFormat("UTC  ·  next %s  ·  click to jump", kPassHoursName[opts.passHours]), (int)pxx + 14, (int)pyy + 29, 11, mutedColor);
+            if (ui.button({ pxx + pw - 124.0f, pyy + 8.0f, 54, 22 }, "Alerts", opts.passAlerts, opts.passAlerts ? "Alerts on: you are warned before visible passes  (F8)" : "Warn me before visible passes  (F8)", { 90, 200, 120, 255 })) opts.passAlerts = !opts.passAlerts;
+            if (ui.button({ pxx + pw - 66.0f, pyy + 8.0f, 54, 22 }, ".ics", false, "Save the next 7 days of passes as a calendar file")) exportPassCalendar();
+            if (list.empty()) UiText(skyVisOnly ? "no visible passes in this window" : "no passes in this window", (int)pxx + 14, (int)pyy + 58, 13, mutedColor);
+            const std::string today = formatTime(simTime, "%Y-%m-%d");
             for (int i = 0; i < shown; ++i) {
                 const SkyPass& sp = *list[i];
-                const Rectangle row{ pxx + 6, pyy + 50.0f + i * 24.0f, pw - 12, 22 };
+                const Rectangle row{ pxx + 6, pyy + 52.0f + i * 24.0f, pw - 12, 22 };
                 const bool h = ui.hover(row);
                 if (h) DrawRectangleRounded(row, 0.25f, 4, Fade(WHITE, 0.08f));
                 if (ui.clicked(row)) { simTime = sp.ps.aos - 30.0; selected = sp.ent; follow = true; }
                 const Color c = sp.ps.vis ? positiveColor : textColor;
-                UiText(TextFormat("%s", fmtHm(sp.ps.aos).c_str()), (int)row.x + 8, (int)row.y + 4, 13, c);
-                UiText(entities[sp.ent].name.substr(0, 16).c_str(), (int)row.x + 52, (int)row.y + 4, 13, c);
-                UiText(TextFormat("%.0f°%s", sp.ps.maxEl / DEG, sp.ps.vis ? " vis" : ""), (int)row.x + 218, (int)row.y + 4, 13, c);
-                UiText(TextFormat("%.0f min", (sp.ps.los - sp.ps.aos) / 60.0), (int)row.x + 262, (int)row.y + 4, 12, mutedColor);
+                UiText(formatTime(sp.ps.aos, formatTime(sp.ps.aos, "%Y-%m-%d") == today ? "%H:%M" : "%d %H:%M").c_str(), (int)row.x + 8, (int)row.y + 4, 13, c);
+                UiText(entities[sp.ent].name.substr(0, 14).c_str(), (int)row.x + 76, (int)row.y + 4, 13, c);
+                UiText(TextFormat("%.0f° %s", sp.ps.maxEl / DEG, compassPoint(sp.ps.peakAz)), (int)row.x + 206, (int)row.y + 4, 13, c);
+                UiText(TextFormat("%.0f min%s", (sp.ps.los - sp.ps.aos) / 60.0, sp.ps.vis ? " vis" : ""), (int)row.x + 268, (int)row.y + 4, 12, sp.ps.vis ? positiveColor : mutedColor);
             }
         }
 
@@ -2251,6 +3267,32 @@ int main(int argc, char** argv) {
             if (ui.button({ bxx, dy + 86, 60, 24 }, "Now")) { simTime = nowUnix(); timeText = fmtClock(simTime, false).substr(0, 16); }
         }
 
+    };
+
+    auto drawIconSheet = [&]() {
+        if (!iconSheet) return;
+        DrawRectangle(0, 0, (int)screenWidth, (int)screenHeight, { 20, 26, 40, 255 });
+        for (int i = 0; i < (int)Icon::Count; ++i) {
+            const Vector2 c{ 90.0f + (i % 7) * 170.0f, 90.0f + (i / 7) * 190.0f };
+            icons.drawOutlined((Icon)i, c, 120.0f, 0.0f, { 120, 200, 255, 255 });
+            icons.draw((Icon)i, { c.x, c.y + 80.0f }, 22.0f, 0.0f, WHITE);
+            icons.draw((Icon)i, { c.x + 40.0f, c.y + 80.0f }, 14.0f, 0.0f, WHITE);
+        }
+    };
+
+    auto drawBanners = [&]() {
+        const double sNow = steadySeconds();
+        banners.erase(std::remove_if(banners.begin(), banners.end(), [&](const Banner& b) { return b.until < sNow; }), banners.end());
+        float y = toolbarHeight + 10.0f;
+        for (const Banner& b : banners) {
+            const float fade = (float)std::min(1.0, (b.until - sNow) / 1.5);
+            const int w = std::min((int)screenWidth - 40, UiMeasure(b.text.c_str(), 15) + 44);
+            const float x = (screenWidth - w) * 0.5f;
+            uiShadowBox({ x, y, (float)w, 36.0f }, 0.92f * fade);
+            DrawRectangle((int)x + 1, (int)y + 1, 4, 34, Fade(b.accent, fade));
+            UiText(b.text.c_str(), (int)x + 18, (int)y + 10, 15, Fade(WHITE, fade));
+            y += 42.0f;
+        }
     };
 
     auto drawHoverTooltip = [&]() {
@@ -2295,14 +3337,18 @@ int main(int argc, char** argv) {
         if (reportBenchmark()) break;
         swapInHighResolutionEarth();
         if (runScriptedTour()) break;
+        if (runScenario()) break;
         if (handleKeyboardAndSearch()) break;
         handleMouseNavigation();
         if (!paused) simTime += frameSeconds * timeScale;
 
+        if (tleUpdater.takeUpdated()) reloadCatalog();
+        updateAlerts();
         updateSatellitePositions();
         updateAstronomy();
         updateCameraAndObserverFrame();
         projectSatellitesAndFindHover();
+        recordHistory();
         refreshMapDataLayers();
         pickSolarAndGalaxyObjects();
         handleClicks();
@@ -2320,7 +3366,9 @@ int main(int argc, char** argv) {
             case Mode::Galaxy: drawGalaxyScene(); break;
         }
         drawSatelliteOverlay();
+        drawMissionOverlay();
         drawGlobeCities();
+        drawHazardOverlays();
         if (viewFade > 0.0f) {
             DrawRectangle(0, 0, (int)screenWidth, (int)screenHeight, Fade(BLACK, viewFade));
             viewFade = std::max(0.0f, viewFade - frameSeconds * 2.6f);
@@ -2328,15 +3376,20 @@ int main(int argc, char** argv) {
         drawToolbar();
         drawTopLeftReadout();
         drawLayersPopup();
+        drawMissionsPopup();
+        drawEclipsesPopup();
         drawSettingsPopup();
         drawHelpOverlay();
         drawMapOverlays();
         drawStatusBarAndHints();
         drawInfoPanels();
         drawWeatherCard();
+        drawLiveCards();
         drawSkyPassPlanner();
         drawTimeDialog();
         drawHoverTooltip();
+        drawBanners();
+        drawIconSheet();
         drawSearchOverlay();
         ui.drawTooltip();
         ui.end();
@@ -2345,6 +3398,7 @@ int main(int argc, char** argv) {
         EndDrawing();
     }
 
+    acHist.save(acHistFile); shipHist.save(shipHistFile);
     CloseWindow();
     std::fflush(stdout);
     std::_Exit(0);
