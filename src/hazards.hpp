@@ -7,6 +7,7 @@
 // All sources are public and need no key.
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>

@@ -43,7 +43,7 @@ struct IcsEvent {
     int alarmMinutes = 10;
 };
 
-inline std::string icsTime(double unix) { return formatTime(unix, "%Y%m%dT%H%M%SZ"); }
+inline std::string icsTime(double when) { return formatTime(when, "%Y%m%dT%H%M%SZ"); }
 
 inline std::string icsEscape(const std::string& s) {
     std::string out;
