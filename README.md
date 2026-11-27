@@ -71,6 +71,7 @@ A spiral galaxy with the Sun at its true position and 17,000 real stars, zoomabl
 - Sky view with planets, the Moon with phase, constellations and twilight colours
 - Solar System and Milky Way models with search, follow and scale bars
 - Type-specific icons: airliners, regional props, business jets, light planes, helicopters and fighters by ICAO type; cargo, tanker, passenger, fishing, sailing and tug silhouettes; satellite icons by kind (station, telescope, navigation, weather, Starlink, crew vehicles). Drawn from vector shapes at start-up, so there are no image files
+- 3D models of the ISS, Hubble, crew capsules and common satellite types when you follow or select one and zoom in (built in code, no model files)
 - Spacecraft missions: past, active and planned, with real JPL trajectories, milestones and replay
 - Live earthquakes, wildfires, volcanoes, storms, aurora forecast, space weather, rocket launches and a decay watch
 - Pass planner with a 3 or 7 day window and minimum elevation, desktop notifications before visible passes, calendar (`.ics`) export, favourites and satellite group filters

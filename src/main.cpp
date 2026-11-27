@@ -33,6 +33,7 @@
 #include "icon_png.hpp"
 #include "meta.hpp"
 #include "missions.hpp"
+#include "models.hpp"
 #include "observer.hpp"
 #include "orbit.hpp"
 #include "paths.hpp"
@@ -63,6 +64,7 @@ int main(int argc, char** argv) {
         if (std::string(argv[i]) == "--bench") benchMode = true;
     }
 
+    if (!scenario.empty()) std::setvbuf(stdout, nullptr, _IONBF, 0);
     SetTraceLogCallback(traceFilter);
     SetConfigFlags(FLAG_MSAA_4X_HINT | FLAG_VSYNC_HINT | FLAG_WINDOW_RESIZABLE | FLAG_WINDOW_HIGHDPI);
     InitWindow(1280, 720, "Space Map");
@@ -77,7 +79,7 @@ int main(int argc, char** argv) {
     uiLoadFont();
     IconAtlas icons;
     icons.build();
-    bool iconSheet = false;
+    bool iconSheet = false, selectedModelShown = false;
     if (!opts.vsync) ClearWindowState(FLAG_VSYNC_HINT);
     Ui ui;
 
@@ -739,9 +741,13 @@ int main(int argc, char** argv) {
     };
 
     // Developer aid: `--scenario <name>` drives the UI through a feature and saves screenshots, then exits.
+    // Helpers used by scenario steps. They live outside runScenario because the steps run after it has returned.
+    auto idx = [&](const char* key) { for (size_t i = 0; i < missions.size(); ++i) if (missions[i].key == key) return (int)i; return 0; };
+    auto pick = [&](const char* needle, float d) {
+        for (size_t i = 0; i < entities.size(); ++i) if (entities[i].name.find(needle) != std::string::npos) { selected = (int)i; follow = true; distGoal = dist = d; return; }
+    };
     auto runScenario = [&]() -> bool {
         if (scenario.empty()) return false;
-        auto idx = [&](const char* key) { for (size_t i = 0; i < missions.size(); ++i) if (missions[i].key == key) return (int)i; return 0; };
         struct Step { int frame; double sec; std::function<void()> fn; };
         static std::vector<Step> steps;
         static size_t next = 0;
@@ -753,6 +759,18 @@ int main(int argc, char** argv) {
         auto shot = [&](int f, const char* name) { at(f, [&, name]() { pendingShot = scenarioPrefix + name + ".png"; }); };
         auto shotT = [&](double sec, const char* name) { atT(sec, [&, name]() { pendingShot = scenarioPrefix + name + ".png"; }); };
         if (steps.empty()) {
+            if (scenario == "models") {
+                at(5, [&]() { opts.showHints = false; setMode(Mode::Globe); simTime = utcToUnix(2026, 11, 27, 12, 0, 0); paused = true; pick("ISS (ZARYA)", 0.35f); });
+                shot(80, "m1_iss");
+                at(85, [&]() { pick("HST", 0.3f); });
+                shot(160, "m2_hubble");
+                at(165, [&]() { pick("STARLINK-1", 0.3f); });
+                shot(240, "m3_starlink");
+                at(245, [&]() { pick("NAVSTAR", 0.9f); });
+                shot(320, "m4_gps");
+                at(325, [&]() { pick("DRAGON", 0.3f); });
+                shot(400, "m5_capsule");
+            }
             if (scenario == "icons") {
                 at(5, [&]() { iconSheet = true; });
                 shot(30, "i1_sheet");
@@ -1507,6 +1525,16 @@ int main(int argc, char** argv) {
                 if (!passed) DrawLine3D(prev, cur, Fade(m.color, sel || hov ? 1.0f : 0.8f));
                 else if ((i & 1) == 0) DrawLine3D(prev, cur, Fade(m.color, 0.38f));
                 prev = cur;
+            }
+        }
+        selectedModelShown = false;
+        if (selected >= 0) {  // close up, the selected satellite is drawn as a 3D model at a constant readable size
+            const Entity& e = entities[selected];
+            const float d = Vector3Distance(cam.position, e.pos);
+            if (d < 4.0f) {
+                const Vector3 velocity = Vector3Subtract(toRender(e.orbit.positionAt(simTime + 5.0)), toRender(e.orbit.positionAt(simTime)));
+                drawSpacecraftModel(satelliteIcon(e.name, e.cat, e.kind == Kind::Ship), spacecraftFrame(e.pos, velocity), d * 0.07f, e.color);
+                selectedModelShown = true;
             }
         }
         BeginBlendMode(BLEND_ADDITIVE);
@@ -2508,11 +2536,11 @@ int main(int argc, char** argv) {
                 }
             }
             for (size_t i = 0; i < entities.size(); ++i) {  // labelled objects, stations and crew vehicles as icons
-                if (!vis[i] || entities[i].dot) continue;
+                if (!vis[i] || entities[i].dot || ((int)i == selected && selectedModelShown)) continue;
                 if (mode == Mode::Globe) icons.drawOutlined(satelliteIcon(entities[i].name, entities[i].cat, entities[i].kind == Kind::Ship), screenPositions[i], (i == (size_t)selected || (int)i == hovered ? 30.0f : 22.0f) * opts.markerScale, 0.0f, entities[i].color);
             }
             for (int idx : { hovered, selected }) {  // selected or hovered dots get an icon too
-                if (idx >= 0 && vis[idx] && entities[idx].dot) icons.drawOutlined(satelliteIcon(entities[idx].name, entities[idx].cat, false), screenPositions[idx], 24.0f * opts.markerScale, 0.0f, entities[idx].color);
+                if (idx >= 0 && vis[idx] && entities[idx].dot && !(idx == selected && selectedModelShown)) icons.drawOutlined(satelliteIcon(entities[idx].name, entities[idx].cat, false), screenPositions[idx], 24.0f * opts.markerScale, 0.0f, entities[idx].color);
             }
             for (int idx : { hovered, selected }) {
                 if (idx < 0 || !vis[idx]) continue;
