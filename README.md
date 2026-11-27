@@ -24,6 +24,10 @@ Live ship traffic (Baltic and Finnish waters) over a dark base map.
 
 ![Ships](docs/screenshots/map-ships.jpg)
 
+Aircraft and ships are drawn as type-specific silhouettes, oriented by heading.
+
+![Aircraft](docs/screenshots/map-aircraft.jpg)
+
 Switch layers, base maps and filters from the toolbar.
 
 ![Layers](docs/screenshots/layers.jpg)
@@ -33,6 +37,10 @@ Switch layers, base maps and filters from the toolbar.
 The sky from your ground station: real stars, 88 constellations, planets, the Moon's phase and every satellite above your horizon, with a pass planner for the ISS, Tiangong and Hubble.
 
 ![Sky](docs/screenshots/sky.jpg)
+
+Messier deep-sky objects are marked, and the Eclipses list (`F9`) predicts the next solar and lunar eclipses.
+
+![Eclipses](docs/screenshots/eclipses.jpg)
 
 ### Solar System
 
@@ -44,11 +52,25 @@ The planets and Pluto, Halley's comet, the asteroid belt, Jupiter's Trojans and 
 
 Real trajectories for 37 missions, drawn on the Solar System view and on the globe: Voyager and Pioneer, Galileo, Cassini at Saturn, Rosetta, MESSENGER, New Horizons, Parker, Lucy, Europa Clipper, JUICE, BepiColombo and more, plus the Apollo 11 Saturn V, Artemis I and II, JWST and a modelled Starship test flight. Missions are grouped as completed, active and planned; select one to see its status, distance, light time and speed at the simulated time, its milestones (launch, flybys, arrivals), and use **Replay** to watch the whole flight or **Previous / Next** to jump between milestones. Press `V` for the mission list.
 
+![Europa Clipper](docs/screenshots/missions.jpg)
+
+![Artemis II loop around the Moon](docs/screenshots/artemis.jpg)
+
+The Starship path is a modelled test-flight profile, not flight telemetry.
+
+![Starship](docs/screenshots/starship.jpg)
+
 Paths come from NASA/JPL Horizons, so spacecraft line up with the planets they visit. Missions that have not launched appear only once JPL has published a predicted trajectory for them.
 
 ### Live layers
 
 Earthquakes (USGS), wildfires, volcanoes and storms (NASA EONET), the aurora forecast with Kp index and solar X-ray flux (NOAA), upcoming rocket launches with countdowns and pads (Launch Library 2), and a decay watch for satellites in very low orbits. Available on the globe and the map.
+
+![Live layers](docs/screenshots/live-layers.jpg)
+
+Follow a satellite and zoom in, and it becomes a 3D model.
+
+![ISS model](docs/screenshots/iss-model.jpg)
 
 ### Milky Way
 

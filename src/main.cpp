@@ -522,6 +522,7 @@ int main(int argc, char** argv) {
         const Mission& m = missions[mi];
         const bool sel = m.frame == MFrame::Sun ? (missionBody[mi] >= 0 && selBody == missionBody[mi]) : selMission == mi;
         if (sel) return true;
+        if (m.frame != MFrame::Sun && m.status(nowUnix()) == MStatus::Planned) return false;  // unconfirmed Earth-orbit paths only show when selected
         return opts.showMissions && missionPasses(m) && m.covers(simTime) && simTime <= missionEndEff(m);
     };
     auto currentMission = [&]() -> int {
@@ -751,6 +752,12 @@ int main(int argc, char** argv) {
     auto pick = [&](const char* needle, float d) {
         for (size_t i = 0; i < entities.size(); ++i) if (entities[i].name.find(needle) != std::string::npos) { selected = (int)i; follow = true; distGoal = dist = d; return; }
     };
+    auto faceSun = [&](bool night) {
+        const Vector3 sr = Vector3Normalize(toRender(sunDirEci(simTime)));
+        if (!night) { yaw = std::atan2(sr.x, sr.z) + 0.35f; pitch = std::asin(sr.y) * 0.5f + 0.12f; }
+        else { yaw = std::atan2(sr.x, sr.z) + 3.14159f - 0.3f; pitch = -std::asin(sr.y) * 0.5f + 0.2f; }
+        yawV = pitchV = 0;
+    };
     auto runScenario = [&]() -> bool {
         if (scenario.empty()) return false;
         struct Step { int frame; double sec; std::function<void()> fn; };
@@ -764,6 +771,49 @@ int main(int argc, char** argv) {
         auto shot = [&](int f, const char* name) { at(f, [&, name]() { pendingShot = scenarioPrefix + name + ".png"; }); };
         auto shotT = [&](double sec, const char* name) { atT(sec, [&, name]() { pendingShot = scenarioPrefix + name + ".png"; }); };
         if (steps.empty()) {
+            if (scenario == "readme") {
+                auto J = [&](double sec, const char* name) { atT(sec, [&, name]() { pendingShot = scenarioPrefix + name + ".jpg"; }); };
+                atT(1.0, [&]() { opts.showHints = false; opts.osNotify = false; setMode(Mode::Solar); opts.missionTrails = 0; solarCam.goal = solarCam.dist = 6.0; selBody = -1; });
+                J(5.0, "solar-system");
+                atT(5.5, [&]() { selectMission(idx("europaclipper"), true); solarCam.goal = solarCam.dist = 6.0; });
+                J(12.0, "missions");
+                atT(12.5, [&]() { selectMission(idx("artemis2"), true); });
+                J(20.0, "artemis");
+                atT(20.5, [&]() { opts.satLEO = opts.satMEO = opts.satGEO = opts.satHEO = false; selectMission(idx("starship"), false); simTime = missions[idx("starship")].launch + 1500.0; paused = true; distGoal = dist = 26.0f; faceGlobeTowards(0.0, -10.0); });
+                J(27.0, "starship");
+                atT(27.5, [&]() { opts.satLEO = opts.satMEO = opts.satGEO = opts.satHEO = true; selMission = -1; paused = false; simTime = nowUnix(); station = { true, 40.7, -74.0 }; ++stationVer; setMode(Mode::Sky);
+                                  simTime = utcToUnix(2026, 12, 20, 3, 0, 0); paused = true; skyAz = 3.14159f; skyEl = 0.9f; skyFov = 75.0f; });
+                J(32.0, "sky");
+                atT(32.5, [&]() { eclipsesOpen = true; });
+                J(35.0, "eclipses");
+                atT(35.5, [&]() { eclipsesOpen = false; paused = false; simTime = nowUnix(); setMode(Mode::Galaxy); });
+                J(40.0, "milky-way");
+                atT(40.5, [&]() { setMode(Mode::Globe); selected = -1; follow = false; distGoal = dist = 16.0f; faceSun(false); });
+                J(46.0, "earth");
+                atT(46.5, [&]() { faceSun(true); });
+                J(52.0, "earth-night");
+                atT(52.5, [&]() { faceGlobeTowards(25.0, -105.0); distGoal = dist = 20.0f;
+                                  quakesOn = eventsOn = auroraOn = launchesOn = true; hazards.setQuakes(true); hazards.setEvents(true); hazards.setAurora(true); launchFeed.setEnabled(true); });
+                J(68.0, "live-layers");
+                atT(68.5, [&]() { layersOpen = true; });
+                J(71.0, "layers");
+                atT(71.5, [&]() { layersOpen = false; quakesOn = eventsOn = auroraOn = launchesOn = false; hazards.setQuakes(false); hazards.setEvents(false); hazards.setAurora(false); launchFeed.setEnabled(false);
+                                  setMode(Mode::Map); adsb.setEnabled(true); mapWidthPx = screenWidth * 70.0; mapCentreU = (-73.95 + 180.0) / 360.0;
+                                  const double sn = std::sin(40.72 * DEG); mapCentreV = 0.5 - std::log((1 + sn) / (1 - sn)) / (4 * PI_D); });
+                J(92.0, "map-aircraft");
+                atT(92.5, [&]() { adsb.setEnabled(false); shipsOn = true; ais.setEnabled(true); mapWidthPx = screenWidth * 60.0; mapCentreU = (24.94 + 180.0) / 360.0;
+                                  const double sn = std::sin(60.12 * DEG); mapCentreV = 0.5 - std::log((1 + sn) / (1 - sn)) / (4 * PI_D); });
+                J(112.0, "map-ships");
+                atT(112.5, [&]() { shipsOn = false; ais.setEnabled(false); adsb.setEnabled(true); opts.radarOn = true; radarFeed.setEnabled(true); opts.cloudsOn = true; opts.windOn = true; wxProbe = true;
+                                   mapWidthPx = screenWidth * 14.0; mapCentreU = (-74.0 + 180.0) / 360.0; const double sn = std::sin(40.7 * DEG); mapCentreV = 0.5 - std::log((1 + sn) / (1 - sn)) / (4 * PI_D); });
+                J(140.0, "map-weather");
+                atT(140.5, [&]() { adsb.setEnabled(false); opts.radarOn = false; opts.cloudsOn = false; opts.windOn = false; wxProbe = false; setMode(Mode::Globe);
+                                   for (size_t i = 0; i < entities.size(); ++i) if (entities[i].name.find("ISS (ZARYA)") != std::string::npos) { selected = (int)i; break; }
+                                   for (int k = 0; k < 600 && selected >= 0; ++k) { const double t = simTime + k * 60.0; if (sunlit(entities[selected].orbit.positionAt(t), sunDirEci(t), earth.radiusKm)) { simTime = t; break; } }
+                                   paused = true; follow = true; distGoal = dist = 0.35f; });
+                J(147.0, "iss-model");
+                atT(148.0, [&]() {});
+            }
             if (scenario == "perf2") {
                 atT(0.3, [&]() { ClearWindowState(FLAG_VSYNC_HINT); opts.showHints = false; setMode(Mode::Map); mapWidthPx = screenWidth * 1.1; mapCentreU = 0.5; mapCentreV = 0.4; });
                 atT(9.5, [&]() { opts.windOn = true; });
