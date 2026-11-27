@@ -1,0 +1,9 @@
+build/
+dist/
+*.part
+*.new
+/tiles/
+/spacemap.cfg
+/spacemap_station.txt
+/earth_hd.jpg
+/earth_night.jpg

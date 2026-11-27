@@ -1,0 +1,78 @@
+cmake_minimum_required(VERSION 3.16)
+
+set(SPACEMAP_VERSION 1.0.0 CACHE STRING "Version stamped into packages")
+project(spacemap VERSION ${SPACEMAP_VERSION} LANGUAGES C CXX)
+if(WIN32)
+  enable_language(RC)
+endif()
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+  set(CMAKE_BUILD_TYPE Release)
+endif()
+
+find_package(raylib 5.0 QUIET)
+if(NOT raylib_FOUND)
+  include(FetchContent)
+  set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+  FetchContent_Declare(raylib
+    GIT_REPOSITORY https://github.com/raysan5/raylib.git
+    GIT_TAG 5.5
+    GIT_SHALLOW TRUE)
+  FetchContent_MakeAvailable(raylib)
+endif()
+
+set(SPACEMAP_SOURCES src/main.cpp src/process.cpp)
+if(WIN32)
+  list(APPEND SPACEMAP_SOURCES res/app.rc)
+endif()
+add_executable(spacemap ${SPACEMAP_SOURCES})
+target_include_directories(spacemap PRIVATE ${CMAKE_SOURCE_DIR}/res)
+find_package(Threads REQUIRED)
+target_link_libraries(spacemap PRIVATE raylib Threads::Threads)
+
+option(SPACEMAP_GUI_SUBSYSTEM "Build the Windows executable without a console window" OFF)
+if(MINGW)
+  target_link_options(spacemap PRIVATE -static)
+  if(SPACEMAP_GUI_SUBSYSTEM)
+    target_link_options(spacemap PRIVATE -mwindows)
+  endif()
+endif()
+
+if(MSVC)
+  target_compile_options(spacemap PRIVATE /W3 /utf-8)
+else()
+  target_compile_options(spacemap PRIVATE -Wall -Wextra -O2)
+endif()
+
+add_custom_command(TARGET spacemap POST_BUILD
+  COMMAND ${CMAKE_COMMAND} -E copy_directory
+          ${CMAKE_SOURCE_DIR}/assets $<TARGET_FILE_DIR:spacemap>/assets)
+
+include(GNUInstallDirs)
+install(TARGETS spacemap RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR} COMPONENT spacemap)
+install(DIRECTORY assets/ DESTINATION ${CMAKE_INSTALL_DATADIR}/spacemap/assets COMPONENT spacemap)
+if(UNIX AND NOT APPLE)
+  install(FILES res/spacemap.desktop DESTINATION ${CMAKE_INSTALL_DATADIR}/applications COMPONENT spacemap)
+  install(FILES res/spacemap_256.png DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/256x256/apps RENAME spacemap.png COMPONENT spacemap)
+endif()
+
+set(CPACK_PACKAGE_NAME "spacemap")
+set(CPACK_PACKAGE_VENDOR "Space Map")
+set(CPACK_PACKAGE_VERSION ${SPACEMAP_VERSION})
+set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Real-time 3D Earth, live map, solar system and Milky Way viewer")
+set(CPACK_PACKAGE_CONTACT "Space Map maintainers")
+set(CPACK_GENERATOR TGZ)
+set(CPACK_COMPONENTS_ALL spacemap)
+set(CPACK_COMPONENTS_GROUPING ALL_COMPONENTS_IN_ONE)
+set(CPACK_ARCHIVE_COMPONENT_INSTALL ON)
+set(CPACK_DEB_COMPONENT_INSTALL ON)
+if(UNIX AND NOT APPLE)
+  list(APPEND CPACK_GENERATOR DEB)
+  set(CPACK_DEBIAN_PACKAGE_SECTION "science")
+  set(CPACK_DEBIAN_PACKAGE_DEPENDS "curl, libgl1, libx11-6, libxrandr2, libxinerama1, libxcursor1, libxi6")
+  set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS ON)
+  set(CPACK_DEBIAN_FILE_NAME DEB-DEFAULT)
+endif()
+include(CPack)

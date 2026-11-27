@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Space Map
+GenericName=Space and Earth Viewer
+Comment=Real-time 3D Earth, live aircraft and ships, the Solar System and the Milky Way
+Exec=spacemap
+Icon=spacemap
+Terminal=false
+Categories=Education;Science;Astronomy;Geography;
+Keywords=satellites;orbit;earth;astronomy;map;aircraft;

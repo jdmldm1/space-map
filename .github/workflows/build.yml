@@ -1,0 +1,137 @@
+name: Build and release
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.compute.outputs.version }}
+    steps:
+      - id: compute
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=0.0.0-dev" >> "$GITHUB_OUTPUT"
+          fi
+
+  windows:
+    needs: version
+    runs-on: windows-latest
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: false
+          install: >-
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+            git
+
+      - name: Configure
+        shell: msys2 {0}
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DSPACEMAP_GUI_SUBSYSTEM=ON -DSPACEMAP_VERSION="${VERSION%%-*}"
+
+      - name: Build
+        shell: msys2 {0}
+        run: cmake --build build
+
+      - name: Package portable zip
+        shell: pwsh
+        run: |
+          $root = "dist/SpaceMap-$env:VERSION-windows-x64"
+          New-Item -ItemType Directory -Force $root | Out-Null
+          Copy-Item build/spacemap.exe $root
+          Copy-Item assets $root/assets -Recurse
+          Copy-Item README.md $root
+          Compress-Archive -Path "$root/*" -DestinationPath "dist/SpaceMap-$env:VERSION-windows-x64-portable.zip"
+          Remove-Item $root -Recurse -Force
+
+      - name: Build installer
+        shell: pwsh
+        run: |
+          choco install innosetup --no-progress -y
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          & $iscc "/DAppVersion=$($env:VERSION -replace '-.*$','')" "/DBuildDir=..\build" installer/spacemap.iss
+          if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed" }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: dist/*
+
+  linux:
+    needs: version
+    runs-on: ubuntu-22.04
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake ninja-build git curl \
+            libgl1-mesa-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev
+
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DSPACEMAP_VERSION="${VERSION%%-*}"
+
+      - name: Build
+        run: cmake --build build
+
+      - name: Package (.deb and .tar.gz)
+        run: |
+          cd build
+          cpack
+          mkdir -p ../dist
+          for file in spacemap_*.deb; do cp "$file" "../dist/SpaceMap-${VERSION}-linux-x64.deb"; done
+          for file in spacemap-*.tar.gz; do cp "$file" "../dist/SpaceMap-${VERSION}-linux-x64.tar.gz"; done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: dist/*
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [windows, linux]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Checksums
+        run: |
+          cd artifacts
+          sha256sum * > SHA256SUMS.txt
+          ls -la
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" artifacts/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "Space Map ${GITHUB_REF_NAME#v}" \
+            --generate-notes
