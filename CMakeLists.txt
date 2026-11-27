@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 
-set(SPACEMAP_VERSION 1.2.0 CACHE STRING "Version stamped into packages")
+set(SPACEMAP_VERSION 1.2.1 CACHE STRING "Version stamped into packages")
 project(spacemap VERSION ${SPACEMAP_VERSION} LANGUAGES C CXX)
 if(WIN32)
   enable_language(RC)
