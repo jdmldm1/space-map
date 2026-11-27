@@ -200,6 +200,10 @@ inline const std::vector<Meta>& table() {
           "First flight of the Space Launch System and Orion. An uncrewed 25-day trip out to a distant retrograde orbit around the Moon and back. Trajectory data starts after trans-lunar injection.", MFrame::EarthInertial, { 120, 210, 255, 255 }, day(2022, 11, 16, 6, 47), day(2022, 12, 11, 17, 40) },
         { "artemis2", "Artemis II", "NASA", "Crewed lunar flyby", "The Moon",
           "First crewed Artemis flight: a loop around the Moon and back on a free-return trajectory. Trajectory data starts after trans-lunar injection.", MFrame::EarthInertial, { 255, 160, 110, 255 }, 0, 0 },
+        { "smile", "SMILE", "ESA / CAS", "Magnetosphere imager", "Earth's magnetosphere",
+          "A joint ESA and Chinese Academy of Sciences mission that images how the solar wind interacts with Earth's magnetic field, from a highly elliptical orbit reaching about 120,000 km. Scheduled to launch in 2026; the path shown is JPL's predicted trajectory, so check current launch status.", MFrame::EarthInertial, { 120, 235, 200, 255 }, 0, 0 },
+        { "euclid", "Euclid", "ESA", "Dark universe telescope", "Sun-Earth L2",
+          "ESA's wide-field telescope for mapping the geometry of the dark universe. Launched on a Falcon 9 and flew to the Sun-Earth L2 point. Shown as the first weeks of its journey.", MFrame::EarthInertial, { 255, 150, 220, 255 }, day(2023, 7, 1, 15, 12), 0 },
         { "roman", "Roman Space Telescope", "NASA", "Wide-field infrared observatory", "Sun-Earth L2",
           "A wide-field infrared survey telescope bound for the Sun-Earth L2 point, to study dark energy and find exoplanets. Scheduled to launch between late 2026 and May 2027; the path shown is a predicted trajectory.", MFrame::EarthInertial, { 190, 170, 255, 255 }, 0, 0 },
         { "jwst", "James Webb Space Telescope", "NASA / ESA / CSA", "Infrared observatory", "Sun-Earth L2",
@@ -268,6 +272,7 @@ inline const std::vector<Ev>& curatedEvents() {
         { "apollo11", day(1969, 7, 24, 16, 51), "Splashdown in the Pacific", false },
         { "artemis1", day(2022, 11, 16, 6, 47), "Liftoff of SLS from Kennedy Space Center", false }, { "artemis1", day(2022, 11, 21), "Closest lunar flyby (130 km)", false },
         { "artemis1", day(2022, 11, 25), "Enters distant retrograde orbit", false }, { "artemis1", day(2022, 12, 11, 17, 40), "Splashdown in the Pacific", false },
+        { "euclid", day(2023, 7, 1, 15, 12), "Liftoff on Falcon 9 from Cape Canaveral", false }, { "euclid", day(2023, 7, 28), "Arrives at the Sun-Earth L2 point", false },
         { "jwst", day(2021, 12, 25, 12, 20), "Liftoff on Ariane 5 from Kourou", false }, { "jwst", day(2022, 1, 8), "Mirror and sunshield deployed", false },
         { "jwst", day(2022, 1, 24), "Arrives at the Sun-Earth L2 point", false },
     };
@@ -367,7 +372,7 @@ inline std::vector<Mission> loadMissions() {
         }
         if (m.launch == 0) { m.launch = m.tStart(); m.launchKnown = false; }
         if (m.key == "artemis2") m.end = m.tEnd();
-        if (m.key == "mmx" || m.key == "roman") m.plannedOverride = true;
+        if (m.key == "mmx" || m.key == "roman" || m.key == "smile") m.plannedOverride = true;
         for (const missiondb::Ev& e : missiondb::curatedEvents()) if (m.key == e.key) m.events.push_back({ e.t, e.label, e.approx });
         const size_t curated = m.events.size();
         for (const auto& g : generated) {

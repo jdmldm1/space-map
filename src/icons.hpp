@@ -15,6 +15,7 @@ enum class Icon {
     Airliner, Regional, BizJet, LightPlane, Helicopter, Fighter,
     ShipCargo, ShipTanker, ShipPassenger, ShipFishing, ShipSailing, ShipTug,
     SatGeneric, SatStarlink, SatStation, SatTelescope, SatNav, SatWeather, Capsule, Probe, Rocket,
+    Disc,
     Count
 };
 
@@ -142,6 +143,7 @@ inline Shape shapeFor(Icon icon) {
             s.push_back(P({ { 0, -1 }, { 0.13f, -0.6f }, { 0.13f, 0.75f }, { -0.13f, 0.75f }, { -0.13f, -0.6f } }));
             both(s, P({ { 0.13f, 0.35f }, { 0.38f, 0.9f }, { 0.13f, 0.75f } })); s.push_back(P({ { -0.08f, 0.75f }, { 0.08f, 0.75f }, { 0.0f, 1.0f } }, 170));
             break;
+        case Icon::Disc: s.push_back(ellipse(0, 0, 0.95f, 0.95f)); break;
         default: break;
     }
     return s;
@@ -196,28 +198,36 @@ struct IconAtlas {
     }
     // Dark halo underneath keeps light icons readable on bright map tiles.
     void drawOutlined(Icon icon, Vector2 at, float size, float rotationDeg, Color tint) const {
-        draw(icon, at, size * 1.28f, rotationDeg, Fade(BLACK, 0.6f));
+        if (size >= 13.0f) draw(icon, at, size * 1.28f, rotationDeg, Fade(BLACK, 0.6f));  // tiny icons skip the halo to save fill and draw calls
         draw(icon, at, size, rotationDeg, tint);
     }
 };
 
 // ---- Choosing an icon from catalogue data --------------------------------------------------------------------------
-inline Icon aircraftIcon(const std::string& type, float* sizeScale = nullptr) {
+// Surface vehicles that ADS-B reports as aircraft (towers, tugs, fire trucks): drawn as a small marker, not an aeroplane.
+inline bool isGroundVehicleType(const std::string& type) { return type == "TWR" || type == "GND" || type == "GRND" || type == "SERV" || type == "EMER" || type == "UAV"; }
+
+// groundSpeedKt (when known) picks a light plane over an airliner for type codes the lists do not cover.
+inline Icon aircraftIcon(const std::string& type, float* sizeScale = nullptr, double groundSpeedKt = -1.0) {
     static std::unordered_map<std::string, std::pair<Icon, float>> cache;
     auto it = cache.find(type);
     if (it == cache.end()) {
         auto in = [&](std::initializer_list<const char*> list) { for (const char* s : list) if (type == s) return true; return false; };
         auto starts = [&](const char* p) { return type.rfind(p, 0) == 0; };
-        std::pair<Icon, float> r{ Icon::Airliner, 1.0f };
-        if (in({ "R44", "R22", "R66", "EC35", "EC30", "EC20", "EC45", "EC55", "A139", "A109", "A119", "S76", "S92", "S61", "B06", "B407", "B412", "B429", "B505", "H60", "H47", "H64", "AS50", "AS55", "AS65", "MD52", "MD60", "H500", "EN28", "EN48", "B212", "B222", "S58", "H145" })) r = { Icon::Helicopter, 1.0f };
+        std::pair<Icon, float> r{ Icon::Count, 1.0f };  // Count = not in any list; decided from speed below
+        if (in({ "R44", "R22", "R66", "EC35", "EC30", "EC20", "EC45", "EC55", "A139", "A109", "A119", "S76", "S92", "S61", "B06", "B407", "B412", "B429", "B505", "H60", "H47", "H64", "AS50", "AS55", "AS65", "MD52", "MD60", "H500", "EN28", "EN48", "B212", "B222", "S58", "H145", "LYNX", "AS32", "AS3B", "A169", "H160", "EH10", "BK17", "EC25", "H125", "H135", "NH90", "EC75", "AS65", "SA330", "PUMA", "SK76", "S70", "AW09", "AW189", "A189" })) r = { Icon::Helicopter, 1.0f };
         else if (starts("F16") || starts("F15") || starts("F18") || starts("F22") || starts("F35") || in({ "T38", "A10", "EUFI", "RFAL", "TORN", "GRIP", "F5", "T6", "FA18", "HAWK", "M346" })) r = { Icon::Fighter, 0.9f };
-        else if (in({ "C150", "C152", "C172", "C177", "C182", "C185", "C206", "C210", "C170", "C140", "PA28", "PA32", "PA34", "PA44", "PA46", "PA18", "PA38", "P28A", "P28B", "SR20", "SR22", "DA40", "DA42", "DA62", "M20P", "M20T", "BE33", "BE35", "BE36", "BE55", "BE58", "AA5", "G115", "RV6", "RV7", "RV8", "RV10", "COZY", "J3", "T206", "T210", "SIRA", "TOBA", "BL8", "AC11", "P180", "GLID", "ULAC", "BALL", "PC6T" })) r = { Icon::LightPlane, 0.85f };
-        else if (in({ "AT72", "AT76", "AT75", "AT45", "AT46", "DH8A", "DH8B", "DH8C", "DH8D", "SF34", "SB20", "E120", "BE20", "BE9L", "BE10", "B190", "PC12", "C208", "TBM7", "TBM8", "TBM9", "JS32", "JS41", "D228", "DHC6", "DHC2", "L410", "SW4", "SH36", "C130", "C30J", "A400", "CN35", "C295", "P3", "E2", "E2C" })) r = { Icon::Regional, 1.0f };
-        else if (starts("C25") || starts("C51") || starts("C52") || starts("C55") || starts("C56") || starts("C68") || starts("C70") || starts("C75") || starts("GLF") || starts("GL") || starts("CL") || starts("LJ") || starts("FA") || starts("E50") || starts("E55") ||
+        else if (in({ "C150", "C152", "C172", "C177", "C182", "C185", "C206", "C210", "C170", "C140", "PA28", "PA32", "PA34", "PA44", "PA46", "PA18", "PA38", "P28A", "P28B", "SR20", "SR22", "DA40", "DA42", "DA62", "M20P", "M20T", "BE33", "BE35", "BE36", "BE55", "BE58", "AA5", "G115", "RV6", "RV7", "RV8", "RV10", "COZY", "J3", "T206", "T210", "SIRA", "TOBA", "BL8", "AC11", "P180", "GLID", "ULAC", "BALL", "PC6T", "DR40", "DR400", "A210", "P208", "WT9", "SLG4", "SLG2", "S22T", "P06T", "D250", "C421", "C42", "C82T", "Z42", "TB20", "TB10", "TB21", "SHRK", "PIVI", "PA30", "PA23", "P46T", "P28R", "P28T", "KP2", "FK9", "DV20", "CRUZ", "BREZ", "AC50", "AC11", "EVSS", "AP32", "BT36", "C441", "C404", "C303", "T34P", "T6" })) r = { Icon::LightPlane, 0.85f };
+        else if (in({ "AT72", "AT76", "AT75", "AT45", "AT46", "DH8A", "DH8B", "DH8C", "DH8D", "SF34", "SB20", "E120", "BE20", "BE9L", "BE10", "B190", "PC12", "C208", "TBM7", "TBM8", "TBM9", "JS32", "JS41", "D228", "DHC6", "DHC2", "L410", "SW4", "SH36", "C130", "C30J", "A400", "CN35", "C295", "P3", "E2", "E2C", "B350", "PAY1", "PAY2", "PAY3", "C27J", "SF50", "DH3T", "SB20", "B190", "BE99", "E110", "F27", "F50", "F60" })) r = { Icon::Regional, 1.0f };
+        else if (starts("C25") || starts("C51") || starts("C52") || starts("C55") || starts("C56") || starts("C68") || starts("C70") || starts("C75") || starts("GLF") || starts("GL") || starts("GA") || starts("G2") || starts("G1") || starts("CL") || starts("LJ") || starts("FA") || starts("E50") || starts("E55") ||
                  in({ "F900", "F2TH", "H25B", "H25C", "PC24", "HDJT", "BE40", "PRM1", "SF50", "EA50", "LJ45", "G280", "FA7X", "FA8X" })) r = { Icon::BizJet, 0.95f };
         else if (starts("A38") || starts("B74") || starts("B77") || starts("B78") || starts("A35") || starts("A33") || starts("A34") || starts("B76") || in({ "MD11", "DC10", "C17", "C5M", "A124", "A225", "K35R", "KC10", "B52" })) r = { Icon::Airliner, 1.25f };
         else if (in({ "A318", "A319", "A320", "A321", "A20N", "A21N", "A19N", "B737", "B738", "B739", "B38M", "B39M", "B37M", "B733", "B734", "B735", "B736", "B752", "B753", "BCS1", "BCS3", "E170", "E75L", "E75S", "E190", "E195", "E290", "E295", "E145", "E135", "CRJ2", "CRJ7", "CRJ9", "CRJX", "MD82", "MD83", "MD88", "MD90", "B712", "B722", "B732", "RJ85", "F100" })) r = { Icon::Airliner, 1.0f };
         it = cache.emplace(type, r).first;
+    }
+    if (it->second.first == Icon::Count) {
+        if (sizeScale) *sizeScale = groundSpeedKt > 0 && groundSpeedKt < 170 ? 0.85f : 1.0f;
+        return groundSpeedKt > 0 && groundSpeedKt < 170 ? Icon::LightPlane : Icon::Airliner;
     }
     if (sizeScale) *sizeScale = it->second.second;
     return it->second.first;

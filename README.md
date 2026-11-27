@@ -42,7 +42,7 @@ The planets and Pluto, Halley's comet, the asteroid belt, Jupiter's Trojans and 
 
 ### Spacecraft missions
 
-Real trajectories for 35 missions, drawn on the Solar System view and on the globe: Voyager and Pioneer, Galileo, Cassini at Saturn, Rosetta, MESSENGER, New Horizons, Parker, Lucy, Europa Clipper, JUICE, BepiColombo and more, plus the Apollo 11 Saturn V, Artemis I and II, JWST and a modelled Starship test flight. Missions are grouped as completed, active and planned; select one to see its status, distance, light time and speed at the simulated time, its milestones (launch, flybys, arrivals), and use **Replay** to watch the whole flight or **Previous / Next** to jump between milestones. Press `V` for the mission list.
+Real trajectories for 37 missions, drawn on the Solar System view and on the globe: Voyager and Pioneer, Galileo, Cassini at Saturn, Rosetta, MESSENGER, New Horizons, Parker, Lucy, Europa Clipper, JUICE, BepiColombo and more, plus the Apollo 11 Saturn V, Artemis I and II, JWST and a modelled Starship test flight. Missions are grouped as completed, active and planned; select one to see its status, distance, light time and speed at the simulated time, its milestones (launch, flybys, arrivals), and use **Replay** to watch the whole flight or **Previous / Next** to jump between milestones. Press `V` for the mission list.
 
 Paths come from NASA/JPL Horizons, so spacecraft line up with the planets they visit. Missions that have not launched appear only once JPL has published a predicted trajectory for them.
 

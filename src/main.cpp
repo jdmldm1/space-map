@@ -80,6 +80,8 @@ int main(int argc, char** argv) {
     IconAtlas icons;
     icons.build();
     bool iconSheet = false, selectedModelShown = false;
+    static double profAcc[10] = {};  // per-section draw time (ms), reported by the "perf2" scenario
+    auto profAdd = [&](int i, double t0) { profAcc[i] += (GetTime() - t0) * 1000.0; };
     if (!opts.vsync) ClearWindowState(FLAG_VSYNC_HINT);
     Ui ui;
 
@@ -329,6 +331,8 @@ int main(int argc, char** argv) {
     std::vector<char> origLabeled;
     double newestEpoch = 0;
     int passCfg = -1, skyPassCfg = -1;
+    double lastPropT = -1e18;                  // sim time of the last full satellite propagation
+    std::vector<double> satEciLon, satMercY;   // cached per satellite at propagation time (used by the map projection)
     struct WatchPass { int ent; Pass ps; };
     std::vector<WatchPass> watchPasses;
     double watchAt = -1e9;
@@ -356,6 +360,7 @@ int main(int argc, char** argv) {
         newestEpoch = 0;
         for (size_t i = 0; i < entities.size(); ++i) { origLabeled[i] = entities[i].labeled; newestEpoch = std::max(newestEpoch, entities[i].orbit.epoch); }
         screenPositions.assign(entities.size(), Vector2{});
+        satEciLon.assign(entities.size(), 0.0); satMercY.assign(entities.size(), 0.0); lastPropT = -1e18;
         vis.assign(entities.size(), 0);
         skyLit.assign(entities.size(), 1);
         applyFavourites();
@@ -387,11 +392,11 @@ int main(int argc, char** argv) {
         const double now = nowUnix(), sNow = steadySeconds();
         if (watchVer != stationVer || sNow - watchAt > 600.0) {
             watchPasses.clear();
-            for (int ei : notable) for (const Pass& ps : computePasses(entities[ei], station, now, earth.radiusKm, 24.0, 6, kMinElDeg[opts.passMinEl] * DEG)) if (ps.vis) watchPasses.push_back({ ei, ps });
+            for (int ei : notable) for (const Pass& ps : computePasses(entities[ei], station, now, earth.radiusKm, 24.0, 6, std::max(10.0, kMinElDeg[opts.passMinEl]) * DEG)) if (ps.vis) watchPasses.push_back({ ei, ps });
             watchAt = sNow; watchVer = stationVer;
         }
         for (const WatchPass& w : watchPasses) {
-            const std::string key = std::to_string(entities[w.ent].norad) + ":" + std::to_string((long long)w.ps.aos);
+            const std::string key = std::to_string(entities[w.ent].norad) + ":" + std::to_string((long long)(w.ps.peak / 600.0));  // peak time in 10 min buckets, stable across recomputation
             const double ahead = w.ps.aos - now;
             if (notifiedPasses.count(key) || ahead > kLeadMinutes[opts.alertLead] * 60.0 || w.ps.los < now) continue;
             notifiedPasses.insert(key);
@@ -759,6 +764,31 @@ int main(int argc, char** argv) {
         auto shot = [&](int f, const char* name) { at(f, [&, name]() { pendingShot = scenarioPrefix + name + ".png"; }); };
         auto shotT = [&](double sec, const char* name) { atT(sec, [&, name]() { pendingShot = scenarioPrefix + name + ".png"; }); };
         if (steps.empty()) {
+            if (scenario == "perf2") {
+                atT(0.3, [&]() { ClearWindowState(FLAG_VSYNC_HINT); opts.showHints = false; setMode(Mode::Map); mapWidthPx = screenWidth * 1.1; mapCentreU = 0.5; mapCentreV = 0.4; });
+                atT(9.5, [&]() { opts.windOn = true; });
+                atT(15.5, [&]() { adsb.setEnabled(true); });
+                atT(21.5, [&]() { shipsOn = true; ais.setEnabled(true); });
+                atT(27.5, [&]() { opts.radarOn = true; radarFeed.setEnabled(true); });
+                atT(33.5, [&]() { quakesOn = eventsOn = auroraOn = true; hazards.setQuakes(true); hazards.setEvents(true); hazards.setAurora(true); });
+                atT(39.5, [&]() { launchesOn = decayOn = true; launchFeed.setEnabled(true); });
+                atT(46.0, [&]() {});
+            }
+            if (scenario == "perf") {
+                atT(0.3, [&]() {
+                    ClearWindowState(FLAG_VSYNC_HINT); opts.showHints = false; setMode(Mode::Globe); distGoal = dist = 22.0f; faceGlobeTowards(30.0, 10.0);
+                    quakesOn = eventsOn = auroraOn = launchesOn = decayOn = true; hazards.setQuakes(true); hazards.setEvents(true); hazards.setAurora(true); launchFeed.setEnabled(true);
+                });
+                atT(18.5, [&]() {
+                    setMode(Mode::Map); mapWidthPx = screenWidth * 6.0; mapCentreU = (10.0 + 180.0) / 360.0; const double sn = std::sin(50.0 * DEG); mapCentreV = 0.5 - std::log((1 + sn) / (1 - sn)) / (4 * PI_D);
+                    adsb.setEnabled(true); shipsOn = true; ais.setEnabled(true); opts.radarOn = true; radarFeed.setEnabled(true); opts.windOn = true; opts.acTrails = true;
+                });
+                atT(38.5, [&]() { mapWidthPx = screenWidth * 1.1; mapCentreU = 0.5; mapCentreV = 0.4; });
+                atT(55.5, [&]() { quakesOn = eventsOn = auroraOn = launchesOn = decayOn = false; hazards.setQuakes(false); hazards.setEvents(false); hazards.setAurora(false); launchFeed.setEnabled(false);
+                                  adsb.setEnabled(false); shipsOn = false; ais.setEnabled(false); opts.radarOn = false; opts.windOn = false; setMode(Mode::Solar); opts.missionTrails = 1; solarCam.goal = solarCam.dist = 6.0; });
+                atT(63.5, [&]() { station = { true, 40.7, -74.0 }; ++stationVer; opts.passHours = 2; setMode(Mode::Sky); skyFov = 75.0f; });
+                atT(71.0, [&]() {});
+            }
             if (scenario == "models") {
                 at(5, [&]() { opts.showHints = false; setMode(Mode::Globe); simTime = utcToUnix(2026, 11, 27, 12, 0, 0); paused = true; pick("ISS (ZARYA)", 0.35f); });
                 shot(80, "m1_iss");
@@ -897,6 +927,22 @@ int main(int argc, char** argv) {
                 shot(740, "08_starship");
                 at(745, [&]() { setMode(Mode::Solar); simTime = nowUnix(); paused = false; solarCam.goal = solarCam.dist = 6.0; selBody = -1; selMission = -1; });
                 shot(820, "09_solar_inner");
+            }
+        }
+        {   // frame-time measurement windows, used by the "perf" scenario
+            static struct Win { double s, e; const char* name; double acc; int n; bool done; } wins[] = { { 13, 18, "globe, all live layers", 0, 0, false }, { 33, 38, "map, Europe: aircraft+ships+radar+wind+hazards", 0, 0, false },
+                { 50, 55, "map, whole world", 0, 0, false }, { 59, 63, "solar system, every full mission path", 0, 0, false }, { 66, 70, "sky, deep sky + planner", 0, 0, false } };
+            static Win wins2[] = { { 6, 9, "world map, satellites only", 0, 0, false }, { 12, 15, "+ wind", 0, 0, false }, { 18, 21, "+ aircraft", 0, 0, false }, { 24, 27, "+ ships", 0, 0, false },
+                                   { 30, 33, "+ radar", 0, 0, false }, { 36, 39, "+ earthquakes/events/aurora", 0, 0, false }, { 42, 45, "+ launches, decay watch", 0, 0, false } };
+            if (scenario == "perf" || scenario == "perf2") {
+                const double now = GetTime() - t0;
+                Win* arr = scenario == "perf" ? wins : wins2;
+                const size_t count = scenario == "perf" ? sizeof(wins) / sizeof(wins[0]) : sizeof(wins2) / sizeof(wins2[0]);
+                for (size_t wi = 0; wi < count; ++wi) {
+                    Win& w = arr[wi];
+                    if (now >= w.s && now < w.e) { if (w.n == 0) for (double& v : profAcc) v = 0.0; w.acc += GetFrameTime(); ++w.n; }
+                    else if (now >= w.e && !w.done) { w.done = true; if (scenario == "perf2") { TraceLog(LOG_INFO, "  prof ms/frame: aurora %.2f events %.2f quakes %.2f launches+decay %.2f wind %.2f aircraft-refresh %.2f aircraft-draw %.2f sat-dots %.2f propagate %.2f project %.2f", profAcc[0] / std::max(1, w.n), profAcc[1] / std::max(1, w.n), profAcc[2] / std::max(1, w.n), profAcc[3] / std::max(1, w.n), profAcc[4] / std::max(1, w.n), profAcc[5] / std::max(1, w.n), profAcc[6] / std::max(1, w.n), profAcc[7] / std::max(1, w.n), profAcc[8] / std::max(1, w.n), profAcc[9] / std::max(1, w.n)); } TraceLog(LOG_INFO, "PERF %-48s %6.2f ms/frame  (%5.0f fps over %d frames)", w.name, w.n ? w.acc / w.n * 1000.0 : 0.0, w.n ? w.n / w.acc : 0.0, w.n); }
+                }
             }
         }
         while (next < steps.size() && (steps[next].sec >= 0.0 ? GetTime() - t0 >= steps[next].sec : frame >= steps[next].frame)) { steps[next].fn(); ++next; }
@@ -1143,29 +1189,34 @@ int main(int argc, char** argv) {
     };
 
     auto updateSatellitePositions = [&]() {
+        auto propagateOne = [&](size_t i) {
+            Entity& e = entities[i];
+            const Vec3d p = e.orbit.positionAt(simTime);
+            e.pos = toRender(p);
+            const double r = std::sqrt(p.x * p.x + p.y * p.y + p.z * p.z);
+            e.altKm = r - earth.radiusKm;
+            satEciLon[i] = std::atan2(p.y, p.x);
+            satMercY[i] = mercatorWorldY(std::asin(p.z / r) / DEG);
+        };
         if (satMode) {
-            auto propagateRange = [&](size_t a, size_t b) {
-                for (size_t i = a; i < b; ++i) {
-                    Entity& e = entities[i];
-                    Vec3d p = e.orbit.positionAt(simTime);
-                    e.pos = toRender(p);
-                    e.altKm = std::sqrt(p.x * p.x + p.y * p.y + p.z * p.z) - earth.radiusKm;
-                }
-            };
-            const size_t n = entities.size();
-            if (nThreads > 1 && n > 2000) {
-                std::vector<std::thread> pool;
-                const size_t chunk = (n + nThreads - 1) / nThreads;
-                for (unsigned k = 1; k < nThreads; ++k) pool.emplace_back(propagateRange, std::min(n, k * chunk), std::min(n, (k + 1) * chunk));
-                propagateRange(0, std::min(n, chunk));
-                for (auto& t : pool) t.join();
-            } else propagateRange(0, n);
-        } else if (selected >= 0) {
-            Vec3d p = entities[selected].orbit.positionAt(simTime);
-            entities[selected].pos = toRender(p);
-            entities[selected].altKm = std::sqrt(p.x * p.x + p.y * p.y + p.z * p.z) - earth.radiusKm;
-        }
-
+            // Satellites barely move between frames, so when the view cannot show it the bulk update runs a few times a second.
+            double step = 0.0;
+            if (mode == Mode::Globe && dist > 6.0f && !follow) step = 0.5;
+            else if (mode == Mode::Map && mapWidthPx / screenWidth < 4.0) step = 0.5;
+            else if (mode == Mode::Sky) step = 0.1;
+            if (std::fabs(simTime - lastPropT) >= step) {
+                lastPropT = simTime;
+                const size_t n = entities.size();
+                auto propagateRange = [&](size_t a, size_t b) { for (size_t i = a; i < b; ++i) propagateOne(i); };
+                if (nThreads > 1 && n > 2000) {
+                    std::vector<std::thread> pool;
+                    const size_t chunk = (n + nThreads - 1) / nThreads;
+                    for (unsigned k = 1; k < nThreads; ++k) pool.emplace_back(propagateRange, std::min(n, k * chunk), std::min(n, (k + 1) * chunk));
+                    propagateRange(0, std::min(n, chunk));
+                    for (auto& t : pool) t.join();
+                } else propagateRange(0, n);
+            } else if (selected >= 0) propagateOne((size_t)selected);  // the selection always moves smoothly
+        } else if (selected >= 0) propagateOne((size_t)selected);
     };
 
     auto updateAstronomy = [&]() {
@@ -1297,10 +1348,8 @@ int main(int argc, char** argv) {
                     vis[i] = !hide && ok && screenPositions[i].x > -20 && screenPositions[i].x < screenWidth + 20 && screenPositions[i].y > -20 && screenPositions[i].y < screenHeight + 20;
                     skyLit[i] = sunlit(sp, sunDirection, earth.radiusKm) ? 1 : 0;
                 } else if (mode == Mode::Map) {
-                    const Vector3& q = entities[i].pos;
-                    const double rx = q.x, ry = -q.z, rz = q.y;
-                    const double lat = std::asin(rz / std::sqrt(rx * rx + ry * ry + rz * rz)) / DEG;
-                    screenPositions[i] = latLonToScreen(lat, (std::atan2(ry, rx) - earthRotationAngle) / DEG);
+                    double du2 = ((satEciLon[i] - earthRotationAngle) / DEG + 180.0) / 360.0 - mapCentreU; du2 -= std::floor(du2 + 0.5);
+                    screenPositions[i] = { (float)(screenWidth * 0.5 + du2 * mapWidthPx), (float)(screenHeight * 0.5 + (satMercY[i] - mapCentreV) * mapWidthPx) };
                     vis[i] = !hide && screenPositions[i].x > -20 && screenPositions[i].x < screenWidth + 20 && screenPositions[i].y > -20 && screenPositions[i].y < screenHeight + 20;
                 } else {
                     const bool front = Vector3DotProduct(Vector3Subtract(entities[i].pos, cam.position), fwd) > 0.0f;
@@ -1342,6 +1391,7 @@ int main(int argc, char** argv) {
             wx.setRequest(wr);
 
             float bestAc = 13.0f * 13.0f, bestShip = 13.0f * 13.0f;
+            const double acT0 = GetTime();
             if (adsb.enabled() || replayOn) {
                 if (replayOn) aircraftList = aircraftAtReplay();
                 else if (adsb.version() != acVer) { aircraftList = adsb.snapshot(); acVer = adsb.version(); }
@@ -1363,6 +1413,7 @@ int main(int argc, char** argv) {
                     }
                 }
             }
+            profAdd(5, acT0);
             if (shipsOn || replayOn) {
                 if (replayOn) ships = shipsAtReplay();
                 else if (ais.version() != shipVer) { ships = ais.snapshot(); shipVer = ais.version(); }
@@ -1683,18 +1734,32 @@ int main(int argc, char** argv) {
                 UiText(TextFormat("%.0f kt", kt), (int)c.x - 14, (int)c.y + 8, 11, Fade(WHITE, 0.6f));
             }
             // Flow animation: particles drift through the wind field interpolated (inverse-distance) from the grid.
+            const double windT0 = GetTime();
             if (grid.size() >= 4) {
                 struct Particle { Vector2 pos{}, trail[7]{}; float age = 0, life = 0, acc = 0; };
-                static std::vector<Particle> particles(1500);
-                auto windAt = [&](double lat, double lon, float& u, float& v, float& speed) {
-                    double sw = 0, su = 0, sv = 0;
-                    for (const WeatherPoint& wp : grid) {
-                        double dl = wp.lon - lon; dl -= 360.0 * std::floor((dl + 180.0) / 360.0);
-                        const double dx = dl * std::cos(lat * DEG), dy = wp.lat - lat, w = 1.0 / (dx * dx + dy * dy + 0.05);
-                        const double to = (wp.windDir + 180.0) * DEG;
-                        sw += w; su += w * wp.windKt * std::sin(to); sv += w * wp.windKt * std::cos(to);
+                static std::vector<Particle> particles(1000);
+                // Interpolate the 8x5 grid onto a finer screen-aligned field once per frame; particles then do a cheap lookup.
+                constexpr int FW = 40, FH = 24;
+                static float fu[FH + 1][FW + 1], fv[FH + 1][FW + 1];
+                const float cellW = screenWidth / FW, cellH = (screenHeight - toolbarHeight) / FH;
+                for (int gy = 0; gy <= FH; ++gy)
+                    for (int gx = 0; gx <= FW; ++gx) {
+                        double la, lo; screenToLatLon(gx * cellW, toolbarHeight + gy * cellH, la, lo);
+                        double sw = 0, su = 0, sv = 0;
+                        for (const WeatherPoint& wp : grid) {
+                            double dl = wp.lon - lo; dl -= 360.0 * std::floor((dl + 180.0) / 360.0);
+                            const double dx = dl * std::cos(la * DEG), dy = wp.lat - la, w = 1.0 / (dx * dx + dy * dy + 0.05), to = (wp.windDir + 180.0) * DEG;
+                            sw += w; su += w * wp.windKt * std::sin(to); sv += w * wp.windKt * std::cos(to);
+                        }
+                        fu[gy][gx] = (float)(su / sw); fv[gy][gx] = (float)(sv / sw);
                     }
-                    u = (float)(su / sw); v = (float)(sv / sw); speed = std::sqrt(u * u + v * v);
+                auto windAtScreen = [&](float x, float y, float& u, float& v, float& speed) {
+                    const float gx = std::clamp(x / cellW, 0.0f, FW - 0.001f), gy = std::clamp((y - toolbarHeight) / cellH, 0.0f, FH - 0.001f);
+                    const int ix = (int)gx, iy = (int)gy;
+                    const float tx = gx - ix, ty = gy - iy;
+                    u = (fu[iy][ix] * (1 - tx) + fu[iy][ix + 1] * tx) * (1 - ty) + (fu[iy + 1][ix] * (1 - tx) + fu[iy + 1][ix + 1] * tx) * ty;
+                    v = (fv[iy][ix] * (1 - tx) + fv[iy][ix + 1] * tx) * (1 - ty) + (fv[iy + 1][ix] * (1 - tx) + fv[iy + 1][ix + 1] * tx) * ty;
+                    speed = std::sqrt(u * u + v * v);
                 };
                 auto respawn = [&](Particle& q) {
                     q.pos = { (float)GetRandomValue(0, (int)screenWidth), (float)GetRandomValue((int)toolbarHeight, (int)screenHeight) };
@@ -1706,17 +1771,17 @@ int main(int argc, char** argv) {
                 for (Particle& q : particles) {
                     q.age += frameSeconds;
                     if (q.age > q.life || q.pos.x < -5 || q.pos.x > screenWidth + 5 || q.pos.y < toolbarHeight - 5 || q.pos.y > screenHeight + 5) { respawn(q); q.age = 0; continue; }
-                    double la, lo; screenToLatLon(q.pos.x, q.pos.y, la, lo);
-                    float u, v, sp; windAt(la, lo, u, v, sp);
+                    float u, v, sp; windAtScreen(q.pos.x, q.pos.y, u, v, sp);
                     q.acc += frameSeconds;
                     if (q.acc >= 0.035f) { q.acc = 0.0f; for (int k = 6; k > 0; --k) q.trail[k] = q.trail[k - 1]; q.trail[0] = q.pos; }
                     q.pos.x += u * 3.6f * std::min(frameSeconds, 0.05f);
                     q.pos.y -= v * 3.6f * std::min(frameSeconds, 0.05f);
                     const float life = std::min(1.0f, std::min(q.age / 0.4f, (q.life - q.age) / 0.6f));
                     const Color c = sp < 10 ? Color{ 150, 215, 255, 255 } : sp < 20 ? Color{ 120, 245, 200, 255 } : sp < 30 ? Color{ 240, 240, 120, 255 } : sp < 40 ? Color{ 255, 180, 80, 255 } : Color{ 255, 110, 110, 255 };
-                    for (int k = 0; k < 6; ++k) DrawLineV(k == 0 ? q.pos : q.trail[k - 1], q.trail[k], Fade(c, life * 0.8f * (1.0f - k / 6.0f)));
+                    DrawLineV(q.pos, q.trail[1], Fade(c, life * 0.8f)); DrawLineV(q.trail[1], q.trail[4], Fade(c, life * 0.35f));  // two segments keep the line count low
                 }
             }
+            profAdd(4, windT0);
         }
 
         {
@@ -1774,6 +1839,8 @@ int main(int argc, char** argv) {
             }
         }
 
+        const double acDrawT0 = GetTime();
+        struct ProfGuard { std::function<void()> f; ~ProfGuard() { f(); } } acGuard{ [&]() { profAdd(6, acDrawT0); } };
         if (adsb.enabled() || replayOn) {
             const float sz = (float)Clamp(4.8 + std::log2(std::max(1.0, zoomF)) * 0.45, 4.8, 10.5) * opts.markerScale;
             const bool trails = opts.acTrails && zoomF > 6.0;
@@ -1794,8 +1861,9 @@ int main(int argc, char** argv) {
                     if (std::fabs(p.x - prev.x) < screenWidth * 0.4f) DrawLineEx(prev, p, 1.6f, Fade(c, 0.7f));
                 }
                 const float s = sz * (sel || hov ? 1.5f : 1.0f);
+                if (isGroundVehicleType(a.type)) { DrawRectangleV({ p.x - s * 0.5f, p.y - s * 0.5f }, { s, s }, Fade(c, 0.9f)); DrawRectangleLinesEx({ p.x - s * 0.5f, p.y - s * 0.5f, s, s }, 1.0f, Fade(BLACK, 0.7f)); if (sel) DrawCircleLines((int)p.x, (int)p.y, s + 6, WHITE); continue; }
                 float typeScale = 1.0f;
-                const Icon aircraftGlyph = aircraftIcon(a.type, &typeScale);
+                const Icon aircraftGlyph = aircraftIcon(a.type, &typeScale, a.gs);
                 const float glyph = s * 3.0f * typeScale * (a.ground ? 0.75f : 1.0f);
                 icons.drawOutlined(aircraftGlyph, p, glyph, (float)a.track, a.ground ? Fade(c, 0.8f) : c);
                 if (sel) DrawCircleLines((int)p.x, (int)p.y, s + 6, WHITE);
@@ -2019,11 +2087,12 @@ int main(int argc, char** argv) {
         refreshHazardData();
         hazardTip.clear();
         float bestD = 11.0f * 11.0f;
-        auto consider = [&](const Vector2& s, const std::string& tip) {
+        auto consider = [&](const Vector2& s, const std::function<std::string()>& tipFn) {
             const float dx = s.x - mouse.x, dy = s.y - mouse.y, d2 = dx * dx + dy * dy;
-            if (d2 < bestD && !ui.overUi) { bestD = d2; hazardTip = tip; }
+            if (d2 < bestD && !ui.overUi) { bestD = d2; hazardTip = tipFn(); }  // text is built only for a new nearest marker
         };
         const double nowT = nowUnix();
+        double pt = GetTime();
         if (auroraOn && !auroraList.empty()) {
             BeginBlendMode(BLEND_ADDITIVE);
             // One OVATION grid cell is 1 degree: size the dots so neighbours blend into a continuous band at any zoom.
@@ -2040,35 +2109,36 @@ int main(int argc, char** argv) {
             }
             EndBlendMode();
         }
+        profAdd(0, pt); pt = GetTime();
         if (eventsOn) {
+            const float k = opts.markerScale;
             for (const NaturalEvent& e : eventList) {
                 Vector2 s;
                 if (!viewPoint(e.lat, e.lon, s)) continue;
-                const float k = opts.markerScale;
-                std::string tip = e.title + (e.magnitude > 0 ? TextFormat("  (%.0f %s)", e.magnitude, e.unit.c_str()) : "");
                 if (e.category == "wildfires") {
                     const float r = (2.2f + std::min(2.6f, (float)std::log10(std::max(10.0, e.magnitude)) * 0.6f)) * k;
-                    DrawCircleV(s, r + 1.5f, Fade(Color{ 255, 90, 20, 255 }, 0.30f));
-                    DrawCircleV(s, r, Color{ 255, 150, 40, 235 });
-                    tip = "Wildfire: " + tip;
+                    icons.draw(Icon::Disc, s, (r + 1.5f) * 2.0f, 0.0f, Fade(Color{ 255, 90, 20, 255 }, 0.30f));
+                    icons.draw(Icon::Disc, s, r * 2.0f, 0.0f, Color{ 255, 150, 40, 235 });
                 } else if (e.category == "volcanoes") {
                     DrawPoly(s, 3, 7.5f * k, -90.0f, Color{ 255, 70, 60, 255 });
                     DrawPolyLinesEx(s, 3, 9.0f * k, -90.0f, 1.2f, Fade(BLACK, 0.7f));
-                    tip = "Volcano: " + tip;
                 } else if (e.category == "severeStorms") {
                     DrawCircleLines((int)s.x, (int)s.y, 9.0f * k, Color{ 200, 140, 255, 255 });
                     DrawCircleV(s, 3.0f * k, Color{ 200, 140, 255, 255 });
-                    tip = "Storm: " + tip;
                 } else if (e.category == "floods") {
                     DrawRectangleV({ s.x - 4.0f * k, s.y - 4.0f * k }, { 8.0f * k, 8.0f * k }, Color{ 80, 160, 255, 235 });
-                    tip = "Flood: " + tip;
                 } else {
-                    DrawCircleV(s, 3.5f * k, Color{ 200, 200, 120, 220 });
+                    icons.draw(Icon::Disc, s, 7.0f * k, 0.0f, Color{ 200, 200, 120, 220 });
                 }
-                if (e.time > 0) tip += "  ·  " + formatTime(e.time, "%Y-%m-%d");
-                consider(s, tip);
+                consider(s, [&e]() {
+                    const char* kind = e.category == "wildfires" ? "Wildfire: " : e.category == "volcanoes" ? "Volcano: " : e.category == "severeStorms" ? "Storm: " : e.category == "floods" ? "Flood: " : "";
+                    std::string tip = std::string(kind) + e.title + (e.magnitude > 0 ? TextFormat("  (%.0f %s)", e.magnitude, e.unit.c_str()) : "");
+                    if (e.time > 0) tip += "  ·  " + formatTime(e.time, "%Y-%m-%d");
+                    return tip;
+                });
             }
         }
+        profAdd(1, pt); pt = GetTime();
         if (quakesOn) {
             for (const Quake& q : quakeList) {
                 Vector2 s;
@@ -2081,9 +2151,10 @@ int main(int argc, char** argv) {
                 DrawCircleLines((int)s.x, (int)s.y, r, Fade(c, a));
                 DrawCircleV(s, 1.8f, Fade(c, a));
                 if (q.tsunami) DrawCircleLines((int)s.x, (int)s.y, r + 3.0f, Color{ 90, 220, 255, 255 });
-                consider(s, TextFormat("M%.1f  %s  ·  depth %.0f km  ·  %.0f h ago%s", q.mag, q.place.c_str(), q.depthKm, std::max(0.0, age), q.tsunami ? "  ·  tsunami alert" : ""));
+                consider(s, [&q, age]() { return std::string(TextFormat("M%.1f  %s  ·  depth %.0f km  ·  %.0f h ago%s", q.mag, q.place.c_str(), q.depthKm, std::max(0.0, age), q.tsunami ? "  ·  tsunami alert" : "")); });
             }
         }
+        profAdd(2, pt); pt = GetTime();
         if (launchesOn) {
             std::vector<size_t> shownPad;
             for (size_t i = 0; i < launchList.size(); ++i) {
@@ -2100,9 +2171,8 @@ int main(int argc, char** argv) {
                 if (hours < 24.0) DrawCircleLines((int)s.x, (int)s.y, 10.0f + 3.0f * std::sin((float)GetTime() * 3.0f), Fade(c, 0.6f));
                 icons.drawOutlined(Icon::Rocket, s, 20.0f * opts.markerScale, 0.0f, c);
                 std::string nm = l.name.substr(0, l.name.find(" | "));
-                std::string tip = l.name + "  ·  " + l.provider + "  ·  " + countdown(l.net) + "  ·  " + l.pad + ", " + l.location;
                 if (showLabels) UiText((nm + "  " + countdown(l.net)).c_str(), (int)s.x + 11, (int)s.y - 7, 12, Fade(c, 0.95f));
-                consider(s, tip);
+                consider(s, [&]() { return l.name + "  ·  " + l.provider + "  ·  " + countdown(l.net) + "  ·  " + l.pad + ", " + l.location; });
             }
         }
         if (decayOn) {
@@ -2113,6 +2183,7 @@ int main(int argc, char** argv) {
                 DrawCircleLines((int)screenPositions[i].x, (int)screenPositions[i].y, 6.0f, Color{ 255, 90, 80, 230 });
             }
         }
+        profAdd(3, pt);
         if (!hazardTip.empty() && ui.tip.empty()) { ui.tip = hazardTip; ui.tipAt = mouse; }
     };
 
@@ -2521,10 +2592,19 @@ int main(int argc, char** argv) {
 
     auto drawSatelliteOverlay = [&]() {
         if (satMode) {
-            for (size_t i = 0; i < entities.size(); ++i) {
+            const double dotT0 = GetTime();
+            rlSetTexture(0);
+            for (size_t i = 0; i < entities.size(); ++i) {  // raw quads: far cheaper than 15,000 DrawRectangle calls
                 if (!vis[i] || !entities[i].dot) continue;
-                DrawRectangle((int)screenPositions[i].x - 1, (int)screenPositions[i].y - 1, 2, 2, (mode == Mode::Sky && !skyLit[i]) ? Fade(entities[i].color, 0.22f) : entities[i].color);
+                const Color dc = (mode == Mode::Sky && !skyLit[i]) ? Fade(entities[i].color, 0.22f) : entities[i].color;
+                const float dx = (float)(int)screenPositions[i].x - 1.0f, dy = (float)(int)screenPositions[i].y - 1.0f;
+                rlCheckRenderBatchLimit(4);
+                rlBegin(RL_QUADS);
+                rlColor4ub(dc.r, dc.g, dc.b, dc.a);
+                rlVertex2f(dx, dy); rlVertex2f(dx, dy + 2.0f); rlVertex2f(dx + 2.0f, dy + 2.0f); rlVertex2f(dx + 2.0f, dy);
+                rlEnd();
             }
+            profAdd(7, dotT0);
             if (showLabels) {
                 for (size_t i = 0; i < entities.size(); ++i) {
                     if (!vis[i] || !entities[i].labeled) continue;
@@ -3372,10 +3452,11 @@ int main(int argc, char** argv) {
 
         if (tleUpdater.takeUpdated()) reloadCatalog();
         updateAlerts();
-        updateSatellitePositions();
+        double stageT = GetTime();
+        updateSatellitePositions(); profAdd(8, stageT); stageT = GetTime();
         updateAstronomy();
         updateCameraAndObserverFrame();
-        projectSatellitesAndFindHover();
+        projectSatellitesAndFindHover(); profAdd(9, stageT);
         recordHistory();
         refreshMapDataLayers();
         pickSolarAndGalaxyObjects();
