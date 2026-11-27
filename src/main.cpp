@@ -447,6 +447,7 @@ int main(int argc, char** argv) {
     auto runScriptedTour = [&]() -> bool {
         if (!shotPrefix.empty()) {
             const double tnow = GetTime();
+            if (frame < 60) SetMousePosition(screenWidth - 4.0f, screenHeight * 0.6f);
             auto centreOn = [&](double lat, double lon, double zoom) {
                 mapCentreU = (lon + 180.0) / 360.0;
                 const double sn = std::sin(lat * DEG); mapCentreV = 0.5 - std::log((1 + sn) / (1 - sn)) / (4 * PI_D);
