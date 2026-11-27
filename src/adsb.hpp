@@ -1,6 +1,7 @@
 #pragma once
 #include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <cmath>
 #include <cstdlib>
 #include <mutex>
@@ -14,10 +15,23 @@
 struct Aircraft {
     std::string hex, call, type, reg, squawk;
     double lat = 0, lon = 0, altFt = 0, gs = 0, track = 0, vrate = 0;
-    bool ground = false, hasAlt = false;
+    bool ground = false, hasAlt = false, mil = false;  // mil: the ADS-B database flag, or a military hex block / callsign
     double stamp = 0;
     std::vector<std::pair<float, float>> trail;
 };
+
+// Military by database flag, by the hex blocks national air forces are allocated, or by their usual callsign prefixes.
+inline bool classifyMilitary(const Aircraft& a) {
+    if (a.mil) return true;
+    if (a.hex.size() == 6) {
+        const std::string h2 = a.hex.substr(0, 2), h3 = a.hex.substr(0, 3);
+        if (h2 == "ae" || h2 == "af" || h2 == "AE" || h2 == "AF") return true;      // United States military block
+        if (h3 == "43c" || h3 == "43C") return true;                                // United Kingdom military block
+    }
+    static const char* prefixes[] = { "RCH", "CNV", "PAT", "RRR", "CFC", "GAF", "FAF", "IAM", "BAF", "ASY", "NATO", "MMF", "HAF", "SUI", "AME", "REACH", "DUKE", "JAKE" };
+    for (const char* p : prefixes) { const size_t n = std::char_traits<char>::length(p); if (a.call.size() > n && a.call.compare(0, n, p) == 0 && std::isdigit((unsigned char)a.call[n])) return true; }
+    return false;
+}
 
 struct AdsbRegion {
     bool valid = false;
@@ -69,6 +83,7 @@ public:
             if (ab == "\"ground\"") a.ground = true;
             else if (!ab.empty()) { a.altFt = std::atof(ab.c_str()); a.hasAlt = true; }
             num(o, "gs", a.gs); num(o, "track", a.track); num(o, "baro_rate", a.vrate);
+            { double flags = 0; if (num(o, "dbFlags", flags)) a.mil = ((int)flags & 1) != 0; }
             double seen = 0; num(o, "seen_pos", seen);
             a.stamp = now - seen;
             if (!a.hex.empty()) out.push_back(std::move(a));
@@ -183,6 +198,7 @@ private:
             nextFetch_ = t + interval;
             const std::string body = readFile(tmp_);
             std::vector<Aircraft> fresh = src == "adsb.lol" ? parseAdsbLol(body, t) : parseOpenSky(body, t);
+            for (Aircraft& a : fresh) a.mil = classifyMilitary(a);
             std::lock_guard<std::mutex> lk(m_);
             for (auto& a : fresh) {
                 auto it = db_.find(a.hex);

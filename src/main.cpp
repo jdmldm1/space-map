@@ -19,6 +19,7 @@
 
 #include "adsb.hpp"
 #include "catalog.hpp"
+#include "decay.hpp"
 #include "cities.hpp"
 #include "earthhd.hpp"
 #include "formatting.hpp"
@@ -182,6 +183,8 @@ int main(int argc, char** argv) {
     HazardFeed hazards(appDir);
     InfoLookup infoLookup(paths::dataPath("info/"));
     std::map<std::string, Texture2D> infoTextures;
+    InfoCard routeCard;  // the selected aircraft's route, when it plausibly fits; drawn as a line on the map
+    bool routeShown = false, routeForced = false;  // routeForced: only the dev scenarios set it
     hazards.start();
     LaunchFeed launchFeed(appDir + "launch_tmp.json");
     launchFeed.start();
@@ -753,12 +756,16 @@ int main(int argc, char** argv) {
 
     auto passesAircraftFilter = [&](const Aircraft& a) {
         static const double minAlt[] = { 0, 10000, 20000, 30000 };
+        if ((opts.milFilter == 1 && a.mil) || (opts.milFilter == 2 && !a.mil)) return false;
         if (a.ground) return opts.acGround;
         return !(a.hasAlt && a.altFt < minAlt[opts.acMinAlt]);
     };
 
     auto passesShipFilter = [&](const Vessel& v) {
         const int c = ais::category(v.shipType);
+        const bool mil = ais::isMilitaryVessel(v);
+        if (opts.milFilter == 2) return mil && !(opts.shipMoving && v.sog < 0.5);  // military-only ignores the category toggles
+        if (opts.milFilter == 1 && mil) return false;
         const bool catOn = c == 0 ? opts.shipCargo : c == 1 ? opts.shipTanker : c == 2 ? opts.shipPass : c == 3 ? opts.shipFish : opts.shipOther;
         return catOn && !(opts.shipMoving && v.sog < 0.5);
     };
@@ -948,6 +955,30 @@ int main(int argc, char** argv) {
                                    paused = true; follow = true; distGoal = dist = 0.35f; });
                 J(147.0, "iss-model");
                 atT(148.0, [&]() {});
+            }
+            if (scenario == "route") {
+                atT(1.0, [&]() { opts.showHints = false; setMode(Mode::Map); adsb.setEnabled(true); mapWidthPx = screenWidth * 7.0; mapCentreU = (-80.0 + 180.0) / 360.0; const double sn = std::sin(41.0 * DEG); mapCentreV = 0.5 - std::log((1 + sn) / (1 - sn)) / (4 * PI_D); });
+                atT(15.0, [&]() { for (const Aircraft& a : aircraftList) { selectedAc = a.hex; break; } routeForced = true; routeShown = true; routeCard.hasRoute = true; routeCard.fromName = "New York (JFK)"; routeCard.toName = "Chicago (ORD)"; routeCard.fromLat = 40.64; routeCard.fromLon = -73.78; routeCard.toLat = 41.98; routeCard.toLon = -87.9; });
+                shotT(18.0, "route-line");
+                atT(19.0, [&]() { routeForced = false; });
+            }
+            if (scenario == "mil") {
+                atT(1.0, [&]() { opts.showHints = false; setMode(Mode::Map); adsb.setEnabled(true); mapWidthPx = screenWidth * 40.0; mapCentreU = (-77.0 + 180.0) / 360.0; const double sn = std::sin(38.9 * DEG); mapCentreV = 0.5 - std::log((1 + sn) / (1 - sn)) / (4 * PI_D); });
+                shotT(25.0, "mil-all");
+                atT(25.5, [&]() { opts.milFilter = 2; });
+                shotT(28.0, "mil-only");
+                atT(28.5, [&]() { for (const Aircraft& a : aircraftList) if (a.mil && !a.ground) { selectedAc = a.hex; break; } });
+                shotT(40.0, "mil-selected");
+                atT(40.5, [&]() { opts.milFilter = 0; selectedAc.clear(); mapWidthPx = screenWidth * 9.0; mapCentreU = (-80.0 + 180.0) / 360.0; const double sn2 = std::sin(37.0 * DEG); mapCentreV = 0.5 - std::log((1 + sn2) / (1 - sn2)) / (4 * PI_D); });
+                for (int n = 0; n < 3; ++n) {
+                    atT(42.0 + n * 14.0, [&, n]() { int skip = n * 6; for (const Aircraft& a : aircraftList) if (!a.call.empty() && !a.ground && a.altFt > 20000 && a.call.size() >= 4 && std::isalpha((unsigned char)a.call[0]) && !a.mil && skip-- <= 0) { selectedAc = a.hex; break; } });
+                    static const char* nm[] = { "route-1", "route-2", "route-3" };
+                    shotT(52.0 + n * 14.0, nm[n]);
+                }
+                atT(95.0, [&]() { selectedAc.clear(); adsb.setEnabled(false); shipsOn = true; ais.setEnabled(true); opts.milFilter = 2; mapWidthPx = screenWidth * 25.0; mapCentreU = (24.94 + 180.0) / 360.0; const double sn = std::sin(60.0 * DEG); mapCentreV = 0.5 - std::log((1 + sn) / (1 - sn)) / (4 * PI_D); });
+                atT(115.0, [&]() { for (const Vessel& v : ships) if (ais::isMilitaryVessel(v)) { selectedShip = v.mmsi; break; } });
+                shotT(125.0, "mil-ship");
+                atT(126.0, [&]() {});
             }
             if (scenario == "info") {
                 atT(1.0, [&]() { opts.showHints = false; setMode(Mode::Globe); pick("ISS (ZARYA)", 1.5f); });
@@ -1325,6 +1356,7 @@ int main(int argc, char** argv) {
             if (IsKeyPressed(KEY_F5)) { auroraOn = !auroraOn; hazards.setAurora(auroraOn); if (auroraOn) needGlobeOrMap(); }
             if (IsKeyPressed(KEY_F6)) { launchesOn = !launchesOn; launchFeed.setEnabled(launchesOn); if (launchesOn) needGlobeOrMap(); }
             if (IsKeyPressed(KEY_F7)) { decayOn = !decayOn; if (decayOn) needGlobeOrMap(); }
+            if (IsKeyPressed(KEY_LEFT_BRACKET)) { opts.milFilter = (opts.milFilter + 1) % 3; pushBanner(opts.milFilter == 0 ? "Showing all aircraft and ships" : opts.milFilter == 1 ? "Showing civilian aircraft and ships only" : "Showing military aircraft and ships only", Color{ 255, 150, 80, 255 }); }
             if (IsKeyPressed(KEY_V)) { missionsOpen = !missionsOpen; if (missionsOpen) layersOpen = settingsOpen = eclipsesOpen = false; }
             if (IsKeyPressed(KEY_F9)) { eclipsesOpen = !eclipsesOpen; if (eclipsesOpen) layersOpen = settingsOpen = missionsOpen = false; }
             if (IsKeyPressed(KEY_F8)) { opts.passAlerts = !opts.passAlerts; pushBanner(opts.passAlerts ? (station.set ? "Pass alerts on" : "Pass alerts on - right-click to set your ground station") : "Pass alerts off", { 90, 200, 120, 255 }); }
@@ -2157,12 +2189,39 @@ int main(int argc, char** argv) {
                 const Icon aircraftGlyph = aircraftIcon(a.type, &typeScale, a.gs);
                 const float glyph = s * 3.0f * typeScale * (a.ground ? 0.75f : 1.0f);
                 icons.drawOutlined(aircraftGlyph, p, glyph, (float)a.track, a.ground ? Fade(c, 0.8f) : c);
+                if (a.mil) DrawCircleLines((int)p.x, (int)p.y, glyph * 0.62f + 2.0f, Fade(Color{ 255, 120, 50, 255 }, 0.9f));
                 if (sel) DrawCircleLines((int)p.x, (int)p.y, s + 6, WHITE);
                 if ((showLabels && zoomF > 14.0 && !a.call.empty() && labelFree(p.x, p.y)) || sel || hov)
                     UiText(a.call.empty() ? a.hex.c_str() : a.call.c_str(), (int)p.x + (int)s + 5, (int)p.y - 6, 12, sel || hov ? WHITE : Fade(c, 0.95f));
             }
         }
 
+        if (routeShown && !selectedAc.empty() && mode == Mode::Map) {  // great-circle line from the departure to the arrival airport
+            const double la1 = routeCard.fromLat * DEG, lo1 = routeCard.fromLon * DEG, la2 = routeCard.toLat * DEG, lo2 = routeCard.toLon * DEG;
+            const Vec3d va{ std::cos(la1) * std::cos(lo1), std::cos(la1) * std::sin(lo1), std::sin(la1) };
+            const Vec3d vb{ std::cos(la2) * std::cos(lo2), std::cos(la2) * std::sin(lo2), std::sin(la2) };
+            const double ang = std::acos(std::clamp(va.x * vb.x + va.y * vb.y + va.z * vb.z, -1.0, 1.0));
+            auto along = [&](double t) -> Vector2 {
+                if (ang < 1e-6) return latLonToScreen(routeCard.fromLat, routeCard.fromLon);
+                const double k1 = std::sin((1.0 - t) * ang) / std::sin(ang), k2 = std::sin(t * ang) / std::sin(ang);
+                const double x = va.x * k1 + vb.x * k2, y = va.y * k1 + vb.y * k2, z = va.z * k1 + vb.z * k2;
+                return latLonToScreen(std::asin(std::clamp(z, -1.0, 1.0)) / DEG, std::atan2(y, x) / DEG);
+            };
+            Vector2 prev = along(0.0);
+            for (int k = 1; k <= 120; ++k) {
+                const Vector2 cur = along(k / 120.0);
+                if (std::fabs(cur.x - prev.x) < screenWidth * 0.5f) {
+                    DrawLineEx(prev, cur, 5.0f, Fade(BLACK, 0.55f));  // halo so the route reads over a busy map
+                    DrawLineEx(prev, cur, 2.4f, (k & 4) ? Fade(Color{ 255, 255, 255, 255 }, 0.95f) : Fade(Color{ 120, 220, 255, 255 }, 0.95f));
+                }
+                prev = cur;
+            }
+            for (int end = 0; end < 2; ++end) {
+                const Vector2 q = along(end);
+                DrawCircleV(q, 5.0f, Fade(BLACK, 0.6f)); DrawCircleLines((int)q.x, (int)q.y, 5.0f, WHITE);
+                UiText((end ? routeCard.toName : routeCard.fromName).c_str(), (int)q.x + 9, (int)q.y - 7, 12, WHITE);
+            }
+        }
         if (shipsOn) {
             const double mPerPx = 40075016.686 / mapWidthPx;
             for (size_t i = 0; i < ships.size(); ++i) {
@@ -2191,6 +2250,7 @@ int main(int argc, char** argv) {
                 const bool moving = v.sog >= 0.5;
                 const float hd = (float)((v.heading < 360 ? v.heading : v.cog));
                 icons.drawOutlined(shipIcon(cat, v.shipType), p, s * 2.7f, hd, moving ? c : Fade(c, 0.7f));
+                if (ais::isMilitaryVessel(v)) DrawCircleLines((int)p.x, (int)p.y, s * 1.5f + 2.0f, Fade(Color{ 255, 120, 50, 255 }, 0.9f));
                 if (sel) DrawCircleLines((int)p.x, (int)p.y, s + 7, WHITE);
                 if ((showLabels && zoomF > 22.0 && !v.name.empty() && labelFree(p.x, p.y)) || sel || hov)
                     UiText(v.name.empty() ? TextFormat("MMSI %d", v.mmsi) : v.name.c_str(), (int)p.x + (int)s + 6, (int)p.y - 6, 12, sel || hov ? WHITE : Fade(c, 0.95f));
@@ -3031,6 +3091,10 @@ int main(int argc, char** argv) {
             if (addLeftToolbarButton("Aircraft", adsb.enabled(), "Live ADS-B aircraft  (A)")) adsb.setEnabled(!adsb.enabled());
             if (addLeftToolbarButton("Ships", shipsOn, "Live AIS vessels  (B)")) toggleShips();
             if (addLeftToolbarButton("Radar", opts.radarOn, "Rain radar  (D)")) toggleRadar();
+            {
+                static const char* milLabel[] = { "All traffic", "Civilian", "Military" };
+                if (addLeftToolbarButton(milLabel[opts.milFilter], opts.milFilter != 0, "Aircraft and ships: all, civilian only or military only  ([)")) opts.milFilter = (opts.milFilter + 1) % 3;
+            }
         }
         rx = screenWidth - 8.0f;
         if (addRightToolbarButton("Help", helpOpen, "Keyboard shortcuts  (F1)")) helpOpen = !helpOpen;
@@ -3111,7 +3175,7 @@ int main(int argc, char** argv) {
         if (layersOpen) {
             const bool wide = mode == Mode::Globe || mode == Mode::Sky;
             const float pw = wide ? 592.0f : 292.0f, lx = std::min(layersX, screenWidth - pw - 8.0f), py = toolbarHeight + 6.0f;
-            const float ph = mode == Mode::Map ? 508.0f : wide ? 500.0f : mode == Mode::Solar ? 180.0f : 70.0f;
+            const float ph = mode == Mode::Map ? 540.0f : wide ? 500.0f : mode == Mode::Solar ? 180.0f : 70.0f;
             uiShadowBox({ lx, py, pw, ph }, 0.92f);
             ui.region({ lx, py, pw, ph });
             float y = py + 10.0f;
@@ -3127,6 +3191,7 @@ int main(int argc, char** argv) {
                 ui.toggle(tx, y, tw, "Wind vectors  (Open-Meteo)   [Z]", opts.windOn); y += 24;
                 ui.toggle(tx, y, tw, "Weather at map centre   [X]", wxProbe); y += 28;
                 ui.slider(tx, y, tw, "Radar opacity", opts.radarOpacity, 0.2f, 1.0f); y += 30;
+                ui.stepper(tx, y, tw, "Aircraft and ships", { "All", "Civilian", "Military" }, opts.milFilter); y += 30;
                 drawPopupSectionTitle(lx, y, "DISPLAY");
                 ui.toggle(tx, y, tw, "Labels   [L]", showLabels); y += 24;
                 ui.toggle(tx, y, tw, "Ground track   [G]", showTrack); y += 24;
@@ -3373,7 +3438,7 @@ int main(int argc, char** argv) {
                                 { "Wheel", "zoom (to the cursor on the map)" }, { "Click", "select an object" }, { "Right-click", "place your ground station" }, { "/", "search (satellites, planets, stars)" },
                                 { "V  F9", "spacecraft missions / eclipses" }, { "\\", "favourite the selected satellite" },
                                 { "F", "follow / centre on the selection" }, { "H", "home: station on map, Sun in galaxy" }, { "R", "reset the view" }, { "Esc", "close panels, release, deselect, quit" } };
-            const KV col2[] = { { "TIME", "" }, { "Space", "pause" }, { ", .  T  1  N", "slower / faster, reverse, real time, now" }, { "LAYERS", "" }, { "A", "live aircraft (ADS-B)" }, { "B", "ships (AIS)" },
+            const KV col2[] = { { "TIME", "" }, { "Space", "pause" }, { ", .  T  1  N", "slower / faster, reverse, real time, now" }, { "LAYERS", "" }, { "A", "live aircraft (ADS-B)" }, { "B", "ships (AIS)" }, { "[", "all / civilian / military traffic" },
                                 { "D  K  Z  X", "rain radar / clouds / wind / weather at centre" }, { "Y", "cycle base map" }, { "L  O  C  G", "labels / orbits / constellations / ground track" },
                                 { "F3 - F7", "quakes, fires, aurora, launches, decay" }, { "F8", "pass alerts on / off" }, { "U", "cycle units" }, { "J", "jump to a date and time" }, { "Q", "constellation lines" }, { "I", "city names" }, { "F10  F11", "presets / ambient tour" }, { "F1  F2  F12", "help / settings / screenshot" } };
             auto column = [&](const KV* rows, int n, float x0) {
@@ -3624,6 +3689,7 @@ int main(int argc, char** argv) {
         const Color classCol[] = { { 215, 225, 240, 255 }, { 90, 255, 120, 255 }, { 200, 160, 255, 255 }, { 255, 240, 120, 255 } };
         const char* classNames[] = { "Low Earth orbit (LEO)", "Medium Earth orbit (MEO)", "Geostationary / geosynchronous", "Highly elliptical (HEO)" };
         hoverTitle.clear(); hoverDetail.clear();
+        if (!routeForced) routeShown = false;
         InfoRequest cardReq;
         std::vector<InfoLink> cardLinks;
         bool cardOn = false;
@@ -3648,6 +3714,13 @@ int main(int argc, char** argv) {
                     cardOn = true;
                     cardReq = { "mission:" + m.key, { nm, nm + " spacecraft" }, { webinfo::lower(nm), firstWord(nm) }, { "mission", "spacecraft", "probe", "rocket", "launch", "satellite", "lander", "rover", "telescope", "program", "flight" }, "" };
                     cardLinks = { { "Search the web", "https://duckduckgo.com/?q=" + webinfo::urlEncode(nm + " " + m.agency + " mission") }, { "Wikimedia images", "https://commons.wikimedia.org/w/index.php?search=" + webinfo::urlEncode(nm) } };
+                    {
+                        std::string ag = m.agency; for (char& ch : ag) ch = (char)std::toupper((unsigned char)ch);
+                        const char* site = ag.find("NASA") != std::string::npos ? "nasa.gov" : ag.find("ESA") != std::string::npos ? "esa.int" : ag.find("JAXA") != std::string::npos ? "jaxa.jp" :
+                                           ag.find("ISRO") != std::string::npos ? "isro.gov.in" : ag.find("CNSA") != std::string::npos ? "cnsa.gov.cn" : ag.find("SPACEX") != std::string::npos ? "spacex.com" :
+                                           ag.find("ROSCOSMOS") != std::string::npos ? "roscosmos.ru" : "";
+                        if (site[0]) cardLinks.insert(cardLinks.begin(), { "Official page (best match)", "https://duckduckgo.com/?q=" + webinfo::urlEncode(std::string("!ducky site:") + site + " " + nm) });
+                    }
                 }
                 addWide(m.kind, mutedColor);
                 addWide("Destination: " + m.target, mutedColor);
@@ -3763,6 +3836,12 @@ int main(int argc, char** argv) {
                 addRow("Inclination", TextFormat("%.2f°", e.orbit.inc / DEG));
                 addRow("Eccentricity", TextFormat("%.4f", e.orbit.e));
                 if (e.revPerDay > 0) addRow("Revolutions", TextFormat("%.2f per day", e.revPerDay));
+                if (e.oclass == 0 && e.orbit.e < 0.05) {
+                    const double days = estimateLifetimeDays(e.orbit.a - earth.radiusKm, e.bstar);
+                    if (days != -1.0) addRow("Est. lifetime", lifetimeText(days), days >= 0.0 && days < 365.0 ? Color{ 255, 150, 90, 255 } : textColor);
+                    const SpaceWeather sw = hazards.weather();
+                    if (sw.kpOk) addRow("Space weather", TextFormat("Kp %.1f  %s", sw.kp, geomagneticStorm(sw.kp)), sw.kp >= 5.0 ? Color{ 255, 150, 90, 255 } : textColor);
+                }
                 addSection("CATALOGUE");
                 if (e.norad) addRow("NORAD ID", TextFormat("%d", e.norad));
                 if (!e.intl.empty()) addRow("Int'l designator", TextFormat("%s  (launched %d)", e.intl.c_str(), e.launchYear));
@@ -3799,7 +3878,7 @@ int main(int argc, char** argv) {
                 }
             } else if (mode == Mode::Map && !selectedAc.empty()) {
                 for (size_t i = 0; i < aircraftList.size(); ++i) {
-                    if (aircraftList[i].hex != selectedAc) continue;
+                    if (aircraftList[i].hex != selectedAc || !passesAircraftFilter(aircraftList[i])) continue;
                     have = true;
                     const Aircraft& a = aircraftList[i];
                     const char* airline = airlineName(a.call);
@@ -3827,6 +3906,7 @@ int main(int argc, char** argv) {
                         cardLinks.push_back({ "Planespotters", "https://www.planespotters.net/hex/" + hexUp });
                     }
                     addSection("AIRCRAFT");
+                    if (a.mil) addRow("Category", "Military", Color{ 255, 150, 80, 255 });
                     addRow("Type", typeName.empty() ? (a.type.empty() ? "?" : a.type) : typeName + "  (" + a.type + ")");
                     if (!a.reg.empty()) addRow("Registration", a.reg);
                     if (hexCountry(a.hex)[0]) addRow("Registered in", hexCountry(a.hex));
@@ -3844,8 +3924,9 @@ int main(int argc, char** argv) {
                         const InfoCard ic = infoLookup.get(cardReq);
                         const double total0 = ic.hasRoute ? greatCircleKm(ic.fromLat, ic.fromLon, ic.toLat, ic.toLon) : 0.0;
                         const double viaKm = ic.hasRoute ? greatCircleKm(ic.fromLat, ic.fromLon, aircraftLatLon[i].first, aircraftLatLon[i].second) + greatCircleKm(aircraftLatLon[i].first, aircraftLatLon[i].second, ic.toLat, ic.toLon) : 0.0;
-                        if (ic.ready && ic.hasRoute && viaKm < total0 * 1.2 + 150.0) {  // the callsign's usual route only counts when the aircraft is actually on it
+                        if (ic.ready && ic.hasRoute && viaKm < total0 * 1.06 + 60.0) {  // the callsign's usual route only counts when the aircraft is actually on it
                             addSection("ROUTE");
+                            routeCard = ic; routeShown = true;
                             addRow("From", ic.fromName);
                             addRow("To", ic.toName);
                             const double total = greatCircleKm(ic.fromLat, ic.fromLon, ic.toLat, ic.toLon);
@@ -3864,7 +3945,7 @@ int main(int argc, char** argv) {
                 }
             } else if (mode == Mode::Map && selectedShip) {
                 for (size_t i = 0; i < ships.size(); ++i) {
-                    if (ships[i].mmsi != selectedShip) continue;
+                    if (ships[i].mmsi != selectedShip || !passesShipFilter(ships[i])) continue;
                     have = true;
                     const Vessel& v = ships[i];
                     const int cat = ais::category(v.shipType);
@@ -3888,6 +3969,7 @@ int main(int argc, char** argv) {
                         } else if (!v.name.empty()) cardLinks.push_back({ "Wikimedia images", "https://commons.wikimedia.org/w/index.php?search=" + webinfo::urlEncode(v.name) });
                     }
                     addSection("VOYAGE");
+                    if (ais::isMilitaryVessel(v)) addRow("Category", v.shipType == 35 ? "Military" : "Law enforcement / government", Color{ 255, 150, 80, 255 });
                     addRow("Status", ais::navStatusName(v.navStat));
                     if (!v.dest.empty()) addRow("Destination", v.dest);
                     if (!v.eta.empty()) addRow("ETA", v.eta + "  (MM-DD HH:MM UTC)");

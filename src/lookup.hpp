@@ -9,12 +9,14 @@
 //   * Wikidata (public, no key): ship facts (builder, operator, tonnage ...) found by IMO number.
 // Results, including misses, are cached on disk under info/ so each object is looked up once.
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <condition_variable>
 #include <cstdio>
 #include <cstdlib>
 #include <deque>
 #include <filesystem>
+#include <fstream>
 #include <functional>
 #include <map>
 #include <mutex>
@@ -450,6 +452,45 @@ private:
         }
     }
 
+    static std::string stripTags(const std::string& html) {
+        std::string o;
+        bool tag = false;
+        for (char ch : html) { if (ch == '<') tag = true; else if (ch == '>') tag = false; else if (!tag) o += ch; }
+        return o;
+    }
+
+    // Wikimedia Commons keeps a category "IMO nnnnnnn" for many ships; it holds one ship category with the photos.
+    // The match is by IMO number, so it is exact.
+    void commonsShip(InfoRequest& r) {
+        if (r.imo.empty()) return;
+        webinfo::JV cat;
+        if (!fetchJson("https://commons.wikimedia.org/w/api.php?action=query&format=json&list=categorymembers&cmtype=subcat&cmlimit=1&cmtitle=Category:IMO%20" + r.imo, cat)) return;
+        const webinfo::JV* q = cat.get("query");
+        const webinfo::JV* members = q ? q->get("categorymembers") : nullptr;
+        if (!members || members->a.empty()) return;
+        const std::string title = members->a[0].str("title");
+        if (title.empty()) return;
+        webinfo::JV files;
+        if (!fetchJson("https://commons.wikimedia.org/w/api.php?action=query&format=json&generator=categorymembers&gcmnamespace=6&gcmlimit=6&prop=imageinfo&iiprop=url%7Cextmetadata&iiurlwidth=480&gcmtitle=" + webinfo::urlEncode(title), files)) return;
+        const webinfo::JV* fq = files.get("query");
+        const webinfo::JV* pages = fq ? fq->get("pages") : nullptr;
+        if (!pages) return;
+        for (const auto& kv : pages->o) {
+            const webinfo::JV* infos = kv.second.get("imageinfo");
+            if (!infos || infos->a.empty()) continue;
+            const webinfo::JV& ii = infos->a[0];
+            const std::string thumb = ii.str("thumburl");
+            if (webinfo::imageExtension(thumb).empty()) continue;
+            const webinfo::JV* meta = ii.get("extmetadata");
+            std::string artist = meta && meta->get("Artist") ? stripTags(meta->get("Artist")->str("value")) : std::string();
+            const std::string licence = meta && meta->get("LicenseShortName") ? meta->get("LicenseShortName")->str("value") : std::string();
+            if (artist.size() > 40) artist = artist.substr(0, 40);
+            r.fallbackImage = thumb;
+            r.fallbackCredit = "Photo: " + (artist.empty() ? std::string("Wikimedia Commons") : artist + " / Wikimedia Commons") + (licence.empty() ? "" : " (" + licence + ")");
+            return;
+        }
+    }
+
     // Ship facts from Wikidata, found by IMO number. Also yields the exact Wikipedia article and a Commons photo.
     void ship(InfoRequest& r, InfoCard& c) {
         if (r.imo.empty()) return;
@@ -536,7 +577,7 @@ private:
                 netError_ = false;
                 if (req.kind == "sat") satellite(req, card);
                 else if (req.kind == "ac") aircraft(req, card);
-                else if (req.kind == "ship") ship(req, card);
+                else if (req.kind == "ship") { ship(req, card); if (req.fallbackImage.empty()) commonsShip(req); }
                 if (!req.photoHex.empty()) planespotters(req, card);
                 wikipedia(req, card);
                 if (card.imageFile.empty() && !req.fallbackImage.empty()) {

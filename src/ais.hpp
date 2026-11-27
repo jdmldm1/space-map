@@ -24,6 +24,9 @@ struct Vessel {
 
 namespace ais {
 
+// AIS ship type 35 is military operations; 55 is law enforcement. Both are shown by the military filter.
+inline bool isMilitaryVessel(const Vessel& v) { return v.shipType == 35 || v.shipType == 55; }
+
 inline const char* shipTypeName(int t) {
     if (t >= 20 && t < 30) return "Wing in ground";
     if (t == 30) return "Fishing";

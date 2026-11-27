@@ -89,7 +89,8 @@ A spiral galaxy with the Sun at its true position and 17,000 real stars, zoomabl
 - Satellite constellation filter plus per-group toggles in the Layers panel (Space Stations & crewed, Starlink, GNSS/Navigation, Weather & Earth observation, Comms, Geostationary)
 - 3D models for the selected satellite, including the ISS, Tiangong, Hubble, JWST, Soyuz, cargo craft, Starlink, Iridium, GPS, weather and geostationary satellites, rocket bodies and debris
 - Curated presets and highlights (`F10`) and an ambient auto-tour (`F11`) that cycles through iconic perspectives, including deep-sky objects and meteor shower radiants
-- A "Learn more" card beside the info panel for any satellite, aircraft, ship or mission: a photo, a short Wikipedia summary, a details list (satellite owner, launch site, status, radio frequencies; aircraft owner and airline; ship builder, operator and tonnage) and links to CelesTrak, N2YO, Heavens-Above, FlightAware, Flightradar24, MarineTraffic and more. Aircraft also get their route with distance remaining and an estimated arrival. Results are cached on disk
+- Military vs civilian filter for aircraft and ships: a toolbar button (or `[`) cycles All, Civilian and Military. Military traffic is ringed in orange; it comes from the ADS-B database flag, military hex blocks and callsigns, and AIS type 35 / 55
+- A "Learn more" card beside the info panel for any satellite, aircraft, ship or mission: a photo, a short Wikipedia summary, a details list (satellite owner, launch site, status, radio frequencies; aircraft owner and airline; ship builder, operator and tonnage) and links to CelesTrak, N2YO, Heavens-Above, FlightAware, Flightradar24, MarineTraffic and more. Aircraft also get their route with distance remaining and an estimated arrival, drawn as a great-circle line on the map. Satellites get a rough orbit-lifetime estimate and current space weather. Mission cards link to the agency's official page. Results are cached on disk
 - Live aircraft (ADS-B) with airline, aircraft type, registration country, climb state and emergency squawks
 - Live ship traffic (AIS) with flag, type, destination, ETA and dimensions, plus a decoder for your own NMEA AIS feed
 - Rain radar, GOES / Himawari cloud imagery, wind vectors and point weather
@@ -129,6 +130,7 @@ Drag to rotate, pan or look around; wheel to zoom; click an object for details; 
 | `Tab`, `E` `M` `S` `P` `W` | Switch view: Earth, Map, Sky, Solar System, Milky Way |
 | `/` | Search |
 | `A` `B` `D` `K` `Z` `X` `I` | Map layers: aircraft, ships, radar, clouds, wind, weather, city names |
+| `[` | Aircraft and ships: all / civilian / military |
 | `F3` `F4` `F5` `F6` `F7` | Earthquakes, wildfires / volcanoes / storms, aurora and space weather, launches, decay watch |
 | `V` | Spacecraft mission list |
 | `\` `F8` | Favourite the selected satellite, pass alerts on / off |
