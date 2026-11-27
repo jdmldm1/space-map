@@ -40,6 +40,10 @@ the license of Space Map's own code; follow the upstream links for the exact ter
 | [NOAA Space Weather Prediction Center](https://www.swpc.noaa.gov) | Kp index, solar X-rays, aurora forecast | Public domain |
 | [Launch Library 2](https://thespacedevs.com/llapi) (The Space Devs) | Upcoming launches | Free tier is rate limited; attribution requested. Space Map polls every 20 minutes |
 | [Wikipedia](https://www.wikipedia.org) / Wikimedia Commons | "Learn more" article summaries and photos for the selected object | Text CC BY-SA 4.0; images carry their own licences (see the page linked from each card) |
+| [CelesTrak SATCAT](https://celestrak.org/satcat/) | Satellite owner, launch site, status and size | Public data |
+| [SatNOGS DB](https://db.satnogs.org) | Satellite radio frequencies, alternate names, operator website and photos | CC BY-SA 4.0 |
+| [adsbdb](https://www.adsbdb.com) | Aircraft owner, manufacturer, photo and flight route | Free public API; photos come from planespotters.net |
+| [Wikidata](https://www.wikidata.org) | Ship builder, operator, tonnage and photo, found by IMO number | CC0 |
 | [Planespotters.net](https://www.planespotters.net) | Aircraft photos in the "Learn more" card | Photographer credit and link shown on the card, as their API terms require |
 | JPL approximate planetary positions | Solar System | NASA/JPL, public data |
 

@@ -1012,6 +1012,15 @@ int main(int argc, char** argv) {
                 atT(63.5, [&]() { station = { true, 40.7, -74.0 }; ++stationVer; opts.passHours = 2; setMode(Mode::Sky); skyFov = 75.0f; });
                 atT(71.0, [&]() {});
             }
+            if (scenario == "models2") {
+                static const char* names[] = { "CSS (TIANHE)", "SOYUZ", "IRIDIUM", "CYGNUS", "SHENZHOU", " R/B", " DEB", "INTELSAT", "SKYNET", "GOES" };
+                static const char* shots[] = { "n_tiangong", "n_soyuz", "n_iridium", "n_cygnus", "n_shenzhou", "n_rocket", "n_debris", "n_comsat", "n_comsat2", "n_goes" };
+                at(5, [&]() { opts.showHints = false; setMode(Mode::Globe); simTime = utcToUnix(2026, 11, 27, 12, 0, 0); paused = true; opts.satLEO = opts.satMEO = opts.satGEO = opts.satHEO = true; });
+                for (int i = 0; i < 10; ++i) {
+                    at(10 + i * 60, [&, i]() { pick(names[i], 0.3f); });
+                    shot(60 + i * 60, shots[i]);
+                }
+            }
             if (scenario == "models") {
                 at(5, [&]() { opts.showHints = false; setMode(Mode::Globe); simTime = utcToUnix(2026, 11, 27, 12, 0, 0); paused = true; pick("ISS (ZARYA)", 0.35f); });
                 shot(80, "m1_iss");
@@ -1827,7 +1836,7 @@ int main(int argc, char** argv) {
             const float d = Vector3Distance(cam.position, e.pos);
             if (d < 4.0f) {
                 const Vector3 velocity = Vector3Subtract(toRender(e.orbit.positionAt(simTime + 5.0)), toRender(e.orbit.positionAt(simTime)));
-                drawSpacecraftModel(satelliteIcon(e.name, e.cat, e.kind == Kind::Ship), spacecraftFrame(e.pos, velocity), d * 0.07f, e.color);
+                drawSpacecraftModel(modelKindFor(e.name, e.cat, e.kind == Kind::Ship, e.oclass), spacecraftFrame(e.pos, velocity), d * 0.07f, e.color);
                 selectedModelShown = true;
             }
         }
@@ -3544,22 +3553,35 @@ int main(int argc, char** argv) {
         const Texture2D* tex = card.ready ? infoTexture(card.imageFile) : nullptr;
         std::vector<InfoLink> all;
         if (!card.wikiUrl.empty()) all.push_back({ "Read more on Wikipedia", card.wikiUrl });
+        for (const auto& l : card.links) all.push_back({ l.first, l.second });
         for (const InfoLink& l : links) all.push_back(l);
-        const int pad = 12, inner = w - 2 * pad;
-        const int imgH = tex ? std::min(190, (int)(inner * (double)tex->height / tex->width)) : 0;
-        const std::vector<std::string> body = card.summary.empty() ? std::vector<std::string>{} : wrapPx(card.summary, 13, inner, 9);
+        const int pad = 12, inner = w - 2 * pad, keyW = 96;
+        std::vector<std::vector<std::string>> factLines;
+        int factH = 0;
+        for (const auto& f : card.facts) { factLines.push_back(wrapPx(f.second, 12, inner - keyW, 2)); factH += (int)factLines.back().size() * 16 + 2; }
+        if (!card.facts.empty()) factH += 22;
         const int cols = 2, lead = card.wikiUrl.empty() ? 0 : 1, rows = lead + ((int)all.size() - lead + cols - 1) / cols;
-        int h = 34;
-        h += tex ? imgH + 20 : 22;
-        h += body.empty() ? 0 : (int)body.size() * 17 + 10;
-        h += rows * 30 + 8;
+        const int maxH = GetScreenHeight() - y - 34;  // leave room for the status bar
+        int imgH = tex ? std::min(190, (int)(inner * (double)tex->height / tex->width)) : 0;
+        std::vector<std::string> body;
+        int h = 0;
+        auto measure = [&]() {
+            h = 34 + (tex ? imgH + 20 : 22) + (body.empty() ? 0 : (int)body.size() * 17 + 10) + factH + rows * 30 + 8;
+        };
+        for (int cap = card.facts.empty() ? 9 : 6; cap >= 2; --cap) {  // shorten the summary first, then the photo, until the card fits
+            body = card.summary.empty() ? std::vector<std::string>{} : wrapPx(card.summary, 13, inner, (size_t)cap);
+            measure();
+            if (h <= maxH) break;
+        }
+        if (h > maxH && tex) { imgH = std::max(80, imgH - (h - maxH)); measure(); }
         uiShadowBox({ (float)x, (float)y, (float)w, (float)h });
         ui.region({ (float)x, (float)y, (float)w, (float)h });
         UiText("LEARN MORE", x + pad, y + 10, 11, { 120, 130, 150, 255 });
         DrawLine(x + pad + 84, y + 17, x + w - pad, y + 17, Fade(WHITE, 0.10f));
         int yy = y + 30;
         if (tex) {
-            const Rectangle dst{ (float)(x + pad), (float)yy, (float)inner, (float)imgH };
+            const float iw = std::min((float)inner, imgH * (float)tex->width / tex->height);
+            const Rectangle dst{ x + pad + (inner - iw) * 0.5f, (float)yy, iw, (float)imgH };
             DrawRectangleRec(dst, { 232, 236, 244, 255 });  // backdrop for logos with transparency
             DrawTexturePro(*tex, { 0, 0, (float)tex->width, (float)tex->height }, dst, { 0, 0 }, 0.0f, WHITE);
             DrawRectangleLinesEx(dst, 1.0f, Fade(WHITE, 0.15f));
@@ -3573,6 +3595,16 @@ int main(int argc, char** argv) {
         if (!body.empty()) {
             for (const std::string& l : body) { UiText(l.c_str(), x + pad, yy, 13, { 205, 212, 228, 255 }); yy += 17; }
             yy += 10;
+        }
+        if (!card.facts.empty()) {
+            DrawLine(x + pad, yy + 8, x + w - pad, yy + 8, Fade(WHITE, 0.10f));
+            UiText("DETAILS", x + pad, yy + 1, 11, { 120, 130, 150, 255 });
+            yy += 22;
+            for (size_t i = 0; i < card.facts.size(); ++i) {
+                UiText(card.facts[i].first.c_str(), x + pad, yy, 12, { 140, 150, 170, 255 });
+                for (const std::string& l : factLines[i]) { UiText(l.c_str(), x + pad + keyW, yy, 12, { 225, 230, 240, 255 }); yy += 16; }
+                yy += 2;
+            }
         }
         const int bw = (inner - 6) / cols;
         for (size_t i = 0; i < all.size(); ++i) {
@@ -3699,6 +3731,8 @@ int main(int argc, char** argv) {
                     const std::string clean = stripParens(e.name);
                     cardOn = true;
                     cardReq.key = "sat:" + (e.norad ? std::to_string(e.norad) : e.name);
+                    cardReq.kind = "sat";
+                    if (e.norad) cardReq.norad = std::to_string(e.norad);
                     if (!junk) {
                         if (!e.group.empty()) { cardReq.queries.push_back(e.group); cardReq.match.push_back(firstWord(e.group)); }
                         cardReq.queries.push_back(clean); cardReq.match.push_back(firstWord(clean));
@@ -3776,7 +3810,9 @@ int main(int argc, char** argv) {
                     {
                         std::string hexUp = a.hex; for (char& ch : hexUp) ch = (char)std::toupper((unsigned char)ch);
                         cardOn = true;
-                        cardReq.key = "ac:" + a.hex + ":" + a.type;
+                        cardReq.key = "ac:" + a.hex + ":" + a.call;
+                        cardReq.kind = "ac";
+                        cardReq.callsign = a.call;
                         cardReq.photoHex = hexUp;
                         if (!typeName.empty()) {
                             const size_t sp = typeName.rfind(' ');
@@ -3804,6 +3840,21 @@ int main(int argc, char** argv) {
                         const double dKm = greatCircleKm(station.lat, station.lon, aircraftLatLon[i].first, aircraftLatLon[i].second);
                         addRow("From station", fmtDistKm(opts, dKm));
                     }
+                    {
+                        const InfoCard ic = infoLookup.get(cardReq);
+                        const double total0 = ic.hasRoute ? greatCircleKm(ic.fromLat, ic.fromLon, ic.toLat, ic.toLon) : 0.0;
+                        const double viaKm = ic.hasRoute ? greatCircleKm(ic.fromLat, ic.fromLon, aircraftLatLon[i].first, aircraftLatLon[i].second) + greatCircleKm(aircraftLatLon[i].first, aircraftLatLon[i].second, ic.toLat, ic.toLon) : 0.0;
+                        if (ic.ready && ic.hasRoute && viaKm < total0 * 1.2 + 150.0) {  // the callsign's usual route only counts when the aircraft is actually on it
+                            addSection("ROUTE");
+                            addRow("From", ic.fromName);
+                            addRow("To", ic.toName);
+                            const double total = greatCircleKm(ic.fromLat, ic.fromLon, ic.toLat, ic.toLon);
+                            const double left = greatCircleKm(aircraftLatLon[i].first, aircraftLatLon[i].second, ic.toLat, ic.toLon);
+                            addRow("Remaining", fmtDistKm(opts, left));
+                            if (total > 50.0) addRow("Progress", TextFormat("%.0f %%  of %s", std::clamp(100.0 * (1.0 - left / total), 0.0, 100.0), fmtDistKm(opts, total).c_str()));
+                            if (!a.ground && a.gs > 80.0 && left > 5.0) addRow("Arrives in (est.)", fmtDuration(left / (a.gs * 1.852) * 3600.0));
+                        }
+                    }
                     addSection("TRANSPONDER");
                     addRow("ICAO hex", a.hex);
                     if (!a.squawk.empty()) addRow("Squawk", a.squawk == "7700" ? a.squawk + "  EMERGENCY" : a.squawk == "7600" ? a.squawk + "  radio failure" : a.squawk == "7500" ? a.squawk + "  hijack" : a.squawk,
@@ -3822,7 +3873,9 @@ int main(int argc, char** argv) {
                     pd.sub = std::string(v.shipType ? ais::shipTypeName(v.shipType) : "Vessel (AIS)") + (ais::mmsiCountry(v.mmsi)[0] ? std::string("  ·  ") + ais::mmsiCountry(v.mmsi) : "");
                     {
                         cardOn = true;
-                        cardReq.key = "ship:" + std::to_string(v.mmsi);
+                        cardReq.key = "ship:" + std::to_string(v.mmsi) + ":" + std::to_string(v.imo);
+                        cardReq.kind = "ship";
+                        if (v.imo) cardReq.imo = std::to_string(v.imo);
                         if (v.name.size() >= 4) {
                             cardReq.queries = { v.name + " ship", v.name };
                             cardReq.match = { webinfo::lower(v.name) };

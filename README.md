@@ -87,8 +87,9 @@ A spiral galaxy with the Sun at its true position and 17,000 real stars, zoomabl
 - City names on the globe and map, thinning out as you zoom out; zooming the globe all the way in hands over to the street-level map, and zooming the map all the way out returns to the globe
 - Satellite tracking with SGP4 orbit propagation, orbit lines, ground tracks, sunlit/shadow status and visible-pass prediction from your own location
 - Satellite constellation filter plus per-group toggles in the Layers panel (Space Stations & crewed, Starlink, GNSS/Navigation, Weather & Earth observation, Comms, Geostationary)
+- 3D models for the selected satellite, including the ISS, Tiangong, Hubble, JWST, Soyuz, cargo craft, Starlink, Iridium, GPS, weather and geostationary satellites, rocket bodies and debris
 - Curated presets and highlights (`F10`) and an ambient auto-tour (`F11`) that cycles through iconic perspectives, including deep-sky objects and meteor shower radiants
-- A "Learn more" card beside the info panel for any satellite, aircraft, ship or mission: a photo (of the actual airframe where Planespotters has one), a short Wikipedia summary, and links to CelesTrak, N2YO, Heavens-Above, FlightAware, Flightradar24, MarineTraffic and more. Results are cached on disk
+- A "Learn more" card beside the info panel for any satellite, aircraft, ship or mission: a photo, a short Wikipedia summary, a details list (satellite owner, launch site, status, radio frequencies; aircraft owner and airline; ship builder, operator and tonnage) and links to CelesTrak, N2YO, Heavens-Above, FlightAware, Flightradar24, MarineTraffic and more. Aircraft also get their route with distance remaining and an estimated arrival. Results are cached on disk
 - Live aircraft (ADS-B) with airline, aircraft type, registration country, climb state and emergency squawks
 - Live ship traffic (AIS) with flag, type, destination, ETA and dimensions, plus a decoder for your own NMEA AIS feed
 - Rain radar, GOES / Himawari cloud imagery, wind vectors and point weather
